@@ -25,12 +25,18 @@ import subprocess
 import sys
 import time
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 CAPTURE_PATH = "/tmp/camtune-capture.jpg"
 DEFAULT_PROFILE_DIR = os.path.expanduser("~/.config/camtune")
 DEFAULT_PROFILE_PATH = os.path.join(DEFAULT_PROFILE_DIR, "profile.json")
 WARMUP_SECS = 2
+DEBOUNCE_SECS = 60
+MAX_LOG_BYTES = 1_000_000  # 1MB
+
+LAUNCHAGENT_LABEL = "com.camtune.daemon"
+LAUNCHAGENT_PATH = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCHAGENT_LABEL}.plist")
+DAEMON_LOG_PATH = os.path.join(DEFAULT_PROFILE_DIR, "daemon.log")
 
 # Fallback ranges for common UVC controls. Used when `uvcc ranges` fails
 # (which happens on some cameras due to LIBUSB errors).
@@ -387,6 +393,199 @@ def cmd_optimize(args, camera_name, vendor, product, ranges):
         print(f"Profile saved to {args.profile}")
 
 
+def daemon_install(args):
+    """Install the LaunchAgent to auto-optimize on camera activation."""
+    if not os.path.exists(args.profile):
+        print(
+            f"No saved profile at {args.profile}\n"
+            "Run 'camtune --save' first to create a profile, then install the daemon.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    camtune_path = os.path.abspath(__file__)
+    program_args = [
+        "        <string>/usr/bin/python3</string>",
+        f"        <string>{camtune_path}</string>",
+        "        <string>daemon</string>",
+        "        <string>run</string>",
+    ]
+    if args.optimize:
+        program_args.append("        <string>--optimize</string>")
+
+    plist = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{LAUNCHAGENT_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+{chr(10).join(program_args)}
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{DAEMON_LOG_PATH}</string>
+    <key>StandardErrorPath</key>
+    <string>{DAEMON_LOG_PATH}</string>
+</dict>
+</plist>
+"""
+
+    os.makedirs(os.path.dirname(LAUNCHAGENT_PATH), exist_ok=True)
+    os.makedirs(os.path.dirname(DAEMON_LOG_PATH), exist_ok=True)
+
+    with open(LAUNCHAGENT_PATH, "w") as f:
+        f.write(plist)
+
+    subprocess.run(["launchctl", "load", LAUNCHAGENT_PATH], check=True)
+
+    mode = "restore + AI optimize" if args.optimize else "restore only"
+    print(f"Daemon installed ({mode}).")
+    print(f"  Plist: {LAUNCHAGENT_PATH}")
+    print(f"  Log:   {DAEMON_LOG_PATH}")
+
+
+def daemon_uninstall(args):
+    """Unload and remove the LaunchAgent."""
+    if not os.path.exists(LAUNCHAGENT_PATH):
+        print("Daemon is not installed.", file=sys.stderr)
+        sys.exit(1)
+
+    subprocess.run(["launchctl", "unload", LAUNCHAGENT_PATH], check=False)
+    os.remove(LAUNCHAGENT_PATH)
+    print("Daemon uninstalled.")
+
+
+def daemon_status(args):
+    """Check if the daemon is installed and running."""
+    if not os.path.exists(LAUNCHAGENT_PATH):
+        print("Not installed.")
+        return
+
+    result = subprocess.run(
+        ["launchctl", "list", LAUNCHAGENT_LABEL],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        # Parse PID from launchctl list output
+        for line in result.stdout.splitlines():
+            if '"PID"' in line:
+                pid = re.search(r"(\d+)", line)
+                if pid:
+                    print(f"Running (PID {pid.group(1)}).")
+                    break
+        else:
+            print("Installed, not currently running.")
+    else:
+        print("Installed, not currently running.")
+
+    print(f"  Plist: {LAUNCHAGENT_PATH}")
+    print(f"  Log:   {DAEMON_LOG_PATH}")
+
+
+def daemon_run(args):
+    """Watch for camera activation and auto-restore/optimize."""
+    import signal
+
+    def _log(msg):
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{ts}] {msg}", flush=True)
+
+    # Log rotation — truncate if over 1MB
+    if os.path.exists(DAEMON_LOG_PATH):
+        try:
+            if os.path.getsize(DAEMON_LOG_PATH) > MAX_LOG_BYTES:
+                with open(DAEMON_LOG_PATH, "w") as f:
+                    f.write("")
+                _log("Log truncated (exceeded 1MB).")
+        except OSError:
+            pass
+
+    _log(f"camtune daemon started (optimize={'yes' if args.optimize else 'no'}).")
+
+    # Graceful shutdown
+    running = True
+
+    def _shutdown(signum, frame):
+        nonlocal running
+        _log(f"Received signal {signum}, shutting down.")
+        running = False
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    last_trigger = 0
+
+    cmd = [
+        "log", "stream", "--predicate",
+        'subsystem == "com.apple.cmio" AND eventMessage CONTAINS "adding stream"',
+    ]
+
+    while running:
+        _log("Watching for camera activation...")
+        try:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            )
+        except OSError as e:
+            _log(f"Failed to start log stream: {e}")
+            time.sleep(10)
+            continue
+
+        try:
+            for line in proc.stdout:
+                if not running:
+                    break
+                if "adding stream" not in line:
+                    continue
+
+                now = time.time()
+                if now - last_trigger < DEBOUNCE_SECS:
+                    continue
+                last_trigger = now
+
+                _log("Camera activation detected.")
+
+                try:
+                    camera_name, vendor, product = detect_camera()
+                    _log(f"Camera: {camera_name}")
+
+                    # Phase 1: Instant profile restore
+                    if os.path.exists(args.profile):
+                        _log("Restoring profile...")
+                        restore_profile(vendor, product, args.profile)
+                        _log("Profile restored.")
+                    else:
+                        _log(f"No profile at {args.profile}, skipping restore.")
+
+                    # Phase 2: AI optimization (optional)
+                    if args.optimize:
+                        _log("Running AI optimization...")
+                        ranges = get_ranges(vendor, product)
+                        # Build a minimal args-like namespace for cmd_optimize
+                        opt_args = argparse.Namespace(
+                            rounds=1, dry_run=False, save=True,
+                            profile=args.profile, model="sonnet",
+                        )
+                        cmd_optimize(opt_args, camera_name, vendor, product, ranges)
+                        _log("AI optimization complete.")
+                except Exception as e:
+                    _log(f"Error during camera optimization: {e}")
+
+        except KeyboardInterrupt:
+            running = False
+        finally:
+            proc.terminate()
+            proc.wait()
+
+    _log("Daemon stopped.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="camtune",
@@ -428,7 +627,40 @@ def main():
     # Restore subcommand
     sub.add_parser("restore", help="Restore camera settings from saved profile")
 
+    # Daemon subcommand
+    daemon_parser = sub.add_parser("daemon", help="Auto-optimize on camera activation")
+    daemon_sub = daemon_parser.add_subparsers(dest="daemon_command")
+
+    install_parser = daemon_sub.add_parser("install", help="Install LaunchAgent")
+    install_parser.add_argument(
+        "--optimize", action="store_true",
+        help="Also run AI optimization after restoring profile",
+    )
+
+    daemon_sub.add_parser("uninstall", help="Remove LaunchAgent")
+    daemon_sub.add_parser("status", help="Show daemon status")
+
+    run_parser = daemon_sub.add_parser("run", help="Run the watcher (called by LaunchAgent)")
+    run_parser.add_argument(
+        "--optimize", action="store_true",
+        help="Run AI optimization after restoring profile",
+    )
+
     args = parser.parse_args()
+
+    # Daemon subcommands don't need camera detection or dep checks up front
+    if args.command == "daemon":
+        if args.daemon_command == "install":
+            daemon_install(args)
+        elif args.daemon_command == "uninstall":
+            daemon_uninstall(args)
+        elif args.daemon_command == "status":
+            daemon_status(args)
+        elif args.daemon_command == "run":
+            daemon_run(args)
+        else:
+            daemon_parser.print_help()
+        return
 
     check_dependencies()
 

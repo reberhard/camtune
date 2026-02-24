@@ -91,6 +91,34 @@ python3 camtune.py --save --profile ~/my-webcam.json
 python3 camtune.py restore --profile ~/my-webcam.json
 ```
 
+### Daemon (auto-optimize on camera start)
+
+The daemon watches for camera activation (e.g., joining a Zoom call) and automatically restores your saved profile. It uses macOS `log stream` to detect camera events in real time.
+
+```bash
+# First, save a profile you're happy with
+python3 camtune.py --save
+
+# Install the daemon (restore-only — instant, no AI)
+python3 camtune.py daemon install
+
+# Or install with AI optimization after restore (~30s per trigger)
+python3 camtune.py daemon install --optimize
+
+# Check status
+python3 camtune.py daemon status
+
+# Uninstall
+python3 camtune.py daemon uninstall
+```
+
+The daemon installs a LaunchAgent that starts on login and watches for camera activation. When triggered, it:
+
+1. **Instantly restores** your saved profile (< 1 second)
+2. **Optionally runs AI optimization** if installed with `--optimize`
+
+Events are debounced (60s window) so multiple log events from a single camera start don't cause repeated adjustments. Logs are written to `~/.config/camtune/daemon.log`.
+
 ## Linux / Windows
 
 camtune is macOS-only because it depends on `imagesnap`. If you're on Linux, you could swap in `ffmpeg` for frame capture — the rest of the pipeline (uvcc + claude) works cross-platform. PRs welcome.
