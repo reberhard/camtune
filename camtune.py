@@ -413,6 +413,10 @@ def daemon_install(args):
     if args.optimize:
         program_args.append("        <string>--optimize</string>")
 
+    # Build PATH that includes Homebrew so uvcc/npx/imagesnap are found
+    path_dirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    path_value = ":".join(path_dirs)
+
     plist = f"""\
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -420,6 +424,11 @@ def daemon_install(args):
 <dict>
     <key>Label</key>
     <string>{LAUNCHAGENT_LABEL}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{path_value}</string>
+    </dict>
     <key>ProgramArguments</key>
     <array>
 {chr(10).join(program_args)}
