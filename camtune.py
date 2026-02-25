@@ -25,7 +25,7 @@ import subprocess
 import sys
 import time
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 CAPTURE_PATH = "/tmp/camtune-capture.jpg"
 DEFAULT_PROFILE_DIR = os.path.expanduser("~/.config/camtune")
@@ -403,6 +403,11 @@ def daemon_install(args):
         )
         sys.exit(1)
 
+    # Unload existing daemon if reinstalling
+    if os.path.exists(LAUNCHAGENT_PATH):
+        subprocess.run(["launchctl", "unload", LAUNCHAGENT_PATH],
+                        capture_output=True, check=False)
+
     camtune_path = os.path.abspath(__file__)
     program_args = [
         "        <string>/usr/bin/python3</string>",
@@ -412,6 +417,9 @@ def daemon_install(args):
     ]
     if args.optimize:
         program_args.append("        <string>--optimize</string>")
+    if args.profile != DEFAULT_PROFILE_PATH:
+        program_args.append("        <string>--profile</string>")
+        program_args.append(f"        <string>{args.profile}</string>")
 
     # Build PATH that includes Homebrew so uvcc/npx/imagesnap are found
     path_dirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
@@ -517,6 +525,11 @@ def daemon_run(args):
 
     _log(f"camtune daemon started (optimize={'yes' if args.optimize else 'no'}).")
 
+    # Validate dependencies at startup (warn, don't exit — they might appear later)
+    for tool in ["imagesnap", "npx"]:
+        if not shutil.which(tool):
+            _log(f"WARNING: '{tool}' not found in PATH. Camera restore will fail.")
+
     # Graceful shutdown
     running = True
 
@@ -529,6 +542,7 @@ def daemon_run(args):
     signal.signal(signal.SIGINT, _shutdown)
 
     last_trigger = 0
+    consecutive_failures = 0
 
     cmd = [
         "log", "stream", "--predicate",
@@ -541,9 +555,12 @@ def daemon_run(args):
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
             )
+            consecutive_failures = 0
         except OSError as e:
             _log(f"Failed to start log stream: {e}")
-            time.sleep(10)
+            consecutive_failures += 1
+            backoff = min(10 * consecutive_failures, 120)
+            time.sleep(backoff)
             continue
 
         try:
@@ -576,14 +593,13 @@ def daemon_run(args):
                     if args.optimize:
                         _log("Running AI optimization...")
                         ranges = get_ranges(vendor, product)
-                        # Build a minimal args-like namespace for cmd_optimize
                         opt_args = argparse.Namespace(
                             rounds=1, dry_run=False, save=True,
                             profile=args.profile, model="sonnet",
                         )
                         cmd_optimize(opt_args, camera_name, vendor, product, ranges)
                         _log("AI optimization complete.")
-                except Exception as e:
+                except (Exception, SystemExit) as e:
                     _log(f"Error during camera optimization: {e}")
 
         except KeyboardInterrupt:
@@ -591,6 +607,13 @@ def daemon_run(args):
         finally:
             proc.terminate()
             proc.wait()
+
+        # Backoff if log stream exited unexpectedly (not from shutdown)
+        if running:
+            consecutive_failures += 1
+            backoff = min(5 * consecutive_failures, 60)
+            _log(f"Log stream exited, restarting in {backoff}s...")
+            time.sleep(backoff)
 
     _log("Daemon stopped.")
 
@@ -645,6 +668,10 @@ def main():
         "--optimize", action="store_true",
         help="Also run AI optimization after restoring profile",
     )
+    install_parser.add_argument(
+        "--profile", metavar="PATH", default=DEFAULT_PROFILE_PATH,
+        help=f"Profile path for restore (default: {DEFAULT_PROFILE_PATH})",
+    )
 
     daemon_sub.add_parser("uninstall", help="Remove LaunchAgent")
     daemon_sub.add_parser("status", help="Show daemon status")
@@ -653,6 +680,10 @@ def main():
     run_parser.add_argument(
         "--optimize", action="store_true",
         help="Run AI optimization after restoring profile",
+    )
+    run_parser.add_argument(
+        "--profile", metavar="PATH", default=DEFAULT_PROFILE_PATH,
+        help=f"Profile path for restore (default: {DEFAULT_PROFILE_PATH})",
     )
 
     args = parser.parse_args()

@@ -119,6 +119,38 @@ The daemon installs a LaunchAgent that starts on login and watches for camera ac
 
 Events are debounced (60s window) so multiple log events from a single camera start don't cause repeated adjustments. Logs are written to `~/.config/camtune/daemon.log`.
 
+## Verification (Smoke Tests)
+
+After installing or modifying the daemon, run these to confirm it works:
+
+```bash
+# 1. Confirm daemon is running
+python3 camtune.py daemon status
+# Expected: "Running (PID <number>)"
+
+# 2. Trigger camera activation (opens Photo Booth, activates camera)
+open -a "Photo Booth"
+
+# 3. Check daemon log for successful restore (within 10 seconds)
+tail -5 ~/.config/camtune/daemon.log
+# Expected: "Camera activation detected" → "Profile restored"
+
+# 4. Close the test app
+osascript -e 'quit app "Photo Booth"'
+```
+
+**Failure test** (daemon should survive, not crash):
+```bash
+# Temporarily rename the profile to simulate missing file
+mv ~/.config/camtune/profile.json ~/.config/camtune/profile.json.bak
+open -a "Photo Booth"
+sleep 5
+tail -3 ~/.config/camtune/daemon.log
+# Expected: "No profile at ..." (logged, daemon continues running)
+mv ~/.config/camtune/profile.json.bak ~/.config/camtune/profile.json
+osascript -e 'quit app "Photo Booth"'
+```
+
 ## Linux / Windows
 
 camtune is macOS-only because it depends on `imagesnap`. If you're on Linux, you could swap in `ffmpeg` for frame capture — the rest of the pipeline (uvcc + claude) works cross-platform. PRs welcome.
