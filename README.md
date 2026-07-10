@@ -1,51 +1,36 @@
-# camtune
+# Ojo
 
-AI-powered webcam optimizer for macOS. Captures a frame from your webcam, sends it to Claude for visual analysis, and applies recommended UVC settings. Iterates until the image is right.
+Pre-call scene controller for macOS. Ojo checks your camera, face exposure, white balance, profile freshness, and controllable light reachability before a video call, then reports Green / Yellow / Red.
 
-No sliders, no GUI — just run a command and let the AI fix your webcam.
+AI Tune remains available as an explicit repair action. It captures a raw camera frame, asks Claude for adjustments, applies UVC/light changes, then verifies and reverts if the result is worse.
 
 ## How it works
 
-1. **Capture** a frame from your webcam via `imagesnap`
-2. **Analyze** the image with Claude's vision (white balance, brightness, contrast, saturation, gain, sharpness)
-3. **Apply** recommended UVC settings via `uvcc`
-4. **Repeat** if needed — run multiple rounds to dial it in
+1. **Check** a raw camera frame locally via `imagesnap`
+2. **Detect** the face via macOS Vision
+3. **Measure** face luma, clipping, RGB balance, profile age, and light reachability
+4. **Report** Green / Yellow / Red without changing camera or lights
+5. **Tune** only when explicitly requested
 
 ```
-$ python3 camtune.py
-
-Camera: Brio 505
-Reading current settings...
-Capturing frame...
-Analyzing with Claude (sonnet)...
-
-Assessment: Image has a warm yellow cast from mixed lighting. Brightness is
-too low and contrast is making shadows harsh.
-
-Applying changes:
-  auto_white_balance_temperature: 0
-  white_balance_temperature: 4200
-  brightness: 120
-  contrast: 100
-  gain: 40
-
-Done.
+$ python3 ojo.py check --json
+{"state": "yellow", "reason": "profile stale (540m old)", "checks": {...}, "scene": {...}}
 ```
 
 ## Requirements
 
 - **macOS** (imagesnap is macOS-only)
-- **Python 3.8+** (no pip dependencies — stdlib only)
+- **Python 3.8+**
 - [imagesnap](https://github.com/rharber/imagesnap) — `brew install imagesnap`
 - [uvcc](https://github.com/niclasku/uvcc) — `npm install -g uvcc`
-- [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) — `npm install -g @anthropic-ai/claude-code`
+- Python packages used by current paths: `anthropic`, `Pillow`, `pyobjc-framework-Vision`, `pyobjc-framework-Quartz`
 
 ## Install
 
 ```bash
 git clone https://github.com/reberhard/camtune.git
 cd camtune
-python3 camtune.py --version
+python3 ojo.py --version
 ```
 
 That's it. Single file, no setup.
@@ -53,26 +38,33 @@ That's it. Single file, no setup.
 ## Usage
 
 ```bash
-# Optimize with auto-detected camera
-python3 camtune.py
+# Local pre-call check; applies no changes
+python3 ojo.py check --json
+
+# Local pre-call check and append a pre_call_check event
+python3 ojo.py check --json --log
 
 # Preview recommendations without applying
-python3 camtune.py --dry-run
+python3 ojo.py --dry-run
 
 # Multiple rounds of refinement
-python3 camtune.py --rounds 3
+python3 ojo.py --rounds 3
 
-# Optimize and save the result as a profile
-python3 camtune.py --save
+# Explicit AI Tune path: raw camera, verify, save
+python3 ojo.py --source camera --verify --save
 
 # Restore a saved profile (no AI needed)
-python3 camtune.py restore
+python3 ojo.py restore
+
+# Record feedback
+python3 ojo.py feedback bad --note "too bright"
+python3 ojo.py feedback comment --note "client complimented the video"
 
 # Target a specific camera
-python3 camtune.py --camera "Brio 505"
+python3 ojo.py --camera "Brio 505" check --json
 
 # Use a different Claude model
-python3 camtune.py --model opus
+python3 ojo.py --model sonnet --source camera --verify --save
 ```
 
 ### Profiles
@@ -81,14 +73,14 @@ Profiles save your optimized settings to `~/.config/camtune/profile.json`. Use `
 
 ```bash
 # Save after optimizing
-python3 camtune.py --save
+python3 ojo.py --source camera --verify --save
 
 # Restore later
-python3 camtune.py restore
+python3 ojo.py restore
 
 # Custom profile path
-python3 camtune.py --save --profile ~/my-webcam.json
-python3 camtune.py restore --profile ~/my-webcam.json
+python3 ojo.py --source camera --verify --save --profile ~/my-webcam.json
+python3 ojo.py --profile ~/my-webcam.json restore
 ```
 
 ### Daemon (auto-optimize on camera start)
@@ -97,19 +89,19 @@ The daemon watches for camera activation (e.g., joining a Zoom call) and automat
 
 ```bash
 # First, save a profile you're happy with
-python3 camtune.py --save
+python3 ojo.py --source camera --verify --save
 
 # Install the daemon (restore-only — instant, no AI)
-python3 camtune.py daemon install
+python3 ojo.py daemon install
 
 # Or install with AI optimization after restore (~30s per trigger)
-python3 camtune.py daemon install --optimize
+python3 ojo.py daemon install --optimize
 
 # Check status
-python3 camtune.py daemon status
+python3 ojo.py daemon status
 
 # Uninstall
-python3 camtune.py daemon uninstall
+python3 ojo.py daemon uninstall
 ```
 
 The daemon installs a LaunchAgent that starts on login and watches for camera activation. When triggered, it:
@@ -125,7 +117,7 @@ After installing or modifying the daemon, run these to confirm it works:
 
 ```bash
 # 1. Confirm daemon is running
-python3 camtune.py daemon status
+python3 ojo.py daemon status
 # Expected: "Running (PID <number>)"
 
 # 2. Trigger camera activation (opens Photo Booth, activates camera)
@@ -153,7 +145,7 @@ osascript -e 'quit app "Photo Booth"'
 
 ## Linux / Windows
 
-camtune is macOS-only because it depends on `imagesnap`. If you're on Linux, you could swap in `ffmpeg` for frame capture — the rest of the pipeline (uvcc + claude) works cross-platform. PRs welcome.
+Ojo is macOS-only because it depends on `imagesnap`, macOS Vision, and UVC tooling commonly used with local UVC camera setups.
 
 ## Background
 

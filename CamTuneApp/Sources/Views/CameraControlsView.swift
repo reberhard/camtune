@@ -1,0 +1,309 @@
+import SwiftUI
+
+struct CameraControlsView: View {
+    @Bindable var state: AppState
+
+    private static let sliderControls: [(key: String, label: String)] = [
+        ("brightness", "Brightness"),
+        ("contrast", "Contrast"),
+        ("saturation", "Saturation"),
+        ("sharpness", "Sharpness"),
+        ("gain", "Gain"),
+    ]
+
+    private static let autoToggles: [(key: String, label: String, onValue: Int)] = [
+        ("auto_exposure_mode", "Auto Exposure", 8),
+        ("auto_white_balance_temperature", "Auto White Balance", 1),
+        ("auto_focus", "Auto Focus", 1),
+    ]
+
+    private static let fovPresets = [90, 78, 65]
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 10) {
+                // Auto toggles
+                ForEach(Self.autoToggles, id: \.key) { control in
+                    autoToggleRow(key: control.key, label: control.label, onValue: control.onValue)
+                }
+
+                Divider()
+
+                // White balance temperature (special: shows Kelvin)
+                if let range = state.ranges["white_balance_temperature"] {
+                    let currentValue = state.currentSettings.intValue(for: "white_balance_temperature") ?? 4000
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("Temperature")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text("\(currentValue) K")
+                                .font(.caption.monospacedDigit())
+                                .fontWeight(.medium)
+                        }
+                        Slider(
+                            value: sliderBinding(
+                                key: "white_balance_temperature",
+                                range: range
+                            ),
+                            in: Double(range.min)...Double(range.max),
+                            step: 100
+                        )
+                        .controlSize(.small)
+                        .disabled(state.currentSettings.intValue(for: "auto_white_balance_temperature") == 1)
+                    }
+                }
+
+                // Main sliders
+                ForEach(Self.sliderControls, id: \.key) { control in
+                    if let range = state.ranges[control.key] {
+                        sliderRow(key: control.key, label: control.label, range: range)
+                    }
+                }
+
+                Divider()
+
+                // Exposure time (only when manual)
+                if let range = state.ranges["exposure_time_absolute"] {
+                    let currentValue = state.currentSettings.intValue(for: "exposure_time_absolute") ?? 300
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("Exposure Time")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text("\(currentValue)")
+                                .font(.caption.monospacedDigit())
+                                .fontWeight(.medium)
+                        }
+                        Slider(
+                            value: sliderBinding(
+                                key: "exposure_time_absolute",
+                                range: range
+                            ),
+                            in: Double(range.min)...Double(range.max),
+                            step: 10
+                        )
+                        .controlSize(.small)
+                        .disabled(state.currentSettings.intValue(for: "auto_exposure_mode") == 8)
+                    }
+                }
+
+                // FoV presets
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Field of View")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        ForEach(Self.fovPresets, id: \.self) { fov in
+                            Button("\(fov)\u{00B0}") {
+                                Task { await state.setFoV(fov) }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .font(.caption)
+                        }
+                    }
+                }
+
+                // Zoom
+                if let range = state.ranges["absolute_zoom"] {
+                    sliderRow(key: "absolute_zoom", label: "Zoom", range: range)
+                }
+
+                compositionControls
+
+                Divider()
+
+                // Actions
+                HStack(spacing: 8) {
+                    Button {
+                        Task { await state.calibrateNow() }
+                    } label: {
+                        Label("Safe Calibrate", systemImage: "slider.horizontal.3")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(state.currentDevice == nil || state.isChecking || state.isCalibrating || state.isDeepRepairing || state.isMeetingReadyRunning)
+
+                    Button("Reset") {
+                        Task { await state.restoreProfile() }
+                    }
+                    .controlSize(.small)
+                    .disabled(state.currentDevice == nil || !state.savedProfileExists)
+
+                    Button("Save") {
+                        Task { await state.saveProfile() }
+                    }
+                    .controlSize(.small)
+                    .disabled(state.currentDevice == nil)
+                }
+
+                if state.isOptimizing || state.isCalibrating || state.isDeepRepairing || state.isMeetingReadyRunning {
+                    OptimizationProgressView(
+                        round: state.optimizationRound,
+                        total: state.totalRounds,
+                        message: state.statusMessage)
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+
+    // MARK: - Components
+
+    private var compositionControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Composition")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(state.panTiltText) / \(state.zoomText)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Picker("Step", selection: Binding(
+                get: { state.compositionStep },
+                set: { state.setCompositionStep($0) }
+            )) {
+                Text("Small").tag(1800)
+                Text("Medium").tag(3600)
+                Text("Large").tag(7200)
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+
+            Grid(horizontalSpacing: 6, verticalSpacing: 6) {
+                GridRow {
+                    Spacer()
+                    Button {
+                        Task { await state.nudgeComposition(dx: 0, dy: state.compositionStep) }
+                    } label: {
+                        Image(systemName: "arrow.up")
+                    }
+                    .help("Pan image up")
+                    Spacer()
+                }
+                GridRow {
+                    Button {
+                        Task { await state.nudgeComposition(dx: -state.compositionStep, dy: 0) }
+                    } label: {
+                        Image(systemName: "arrow.left")
+                    }
+                    .help("Pan image left")
+
+                    Button {
+                        Task { await state.resetComposition() }
+                    } label: {
+                        Image(systemName: "scope")
+                    }
+                    .help("Reset pan/tilt")
+
+                    Button {
+                        Task { await state.nudgeComposition(dx: state.compositionStep, dy: 0) }
+                    } label: {
+                        Image(systemName: "arrow.right")
+                    }
+                    .help("Pan image right")
+                }
+                GridRow {
+                    Spacer()
+                    Button {
+                        Task { await state.nudgeComposition(dx: 0, dy: -state.compositionStep) }
+                    } label: {
+                        Image(systemName: "arrow.down")
+                    }
+                    .help("Pan image down")
+                    Spacer()
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(state.currentDevice == nil)
+
+            HStack(spacing: 6) {
+                Button {
+                    Task { await state.undoCompositionNudge() }
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(state.lastComposition == nil)
+
+                Button {
+                    Task { await state.applyFramingRecommendation() }
+                } label: {
+                    Label("Apply Fix", systemImage: "scope")
+                }
+
+                Button {
+                    Task { await state.nudgeZoom(delta: -20) }
+                } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                }
+                .help("Zoom out")
+
+                Button {
+                    Task { await state.nudgeZoom(delta: 20) }
+                } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+                .help("Zoom in")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(state.currentDevice == nil)
+        }
+    }
+
+    private func autoToggleRow(key: String, label: String, onValue: Int) -> some View {
+        let currentValue = state.currentSettings.intValue(for: key)
+        let isOn = currentValue == onValue
+        return Toggle(isOn: Binding(
+            get: { isOn },
+            set: { newValue in
+                let setValue = newValue ? onValue : (onValue == 8 ? 1 : 0)
+                Task { await state.setUVCControl(key, value: setValue) }
+            }
+        )) {
+            Text(label)
+                .font(.caption)
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+    }
+
+    private func sliderRow(key: String, label: String, range: UVCRange) -> some View {
+        let currentValue = state.currentSettings.intValue(for: key) ?? range.min
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(currentValue)")
+                    .font(.caption.monospacedDigit())
+                    .fontWeight(.medium)
+            }
+            Slider(
+                value: sliderBinding(key: key, range: range),
+                in: Double(range.min)...Double(range.max),
+                step: 1
+            )
+            .controlSize(.small)
+        }
+    }
+
+    private func sliderBinding(key: String, range: UVCRange) -> Binding<Double> {
+        Binding(
+            get: {
+                Double(state.currentSettings.intValue(for: key) ?? range.min)
+            },
+            set: { newValue in
+                let intValue = range.clamp(Int(newValue))
+                Task { await state.setUVCControl(key, value: intValue) }
+            }
+        )
+    }
+}
