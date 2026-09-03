@@ -37,10 +37,17 @@ EVENTS_PATH = os.path.join(DEFAULT_PROFILE_DIR, "events.jsonl")
 FEEDBACK_PATH = os.path.join(DEFAULT_PROFILE_DIR, "feedback.jsonl")
 COMMENTS_PATH = os.path.join(DEFAULT_PROFILE_DIR, "comments.jsonl")
 CHECK_CACHE_PATH = os.path.join(DEFAULT_PROFILE_DIR, "pre-call-check-cache.json")
+FACE_PRESENCE_PATH = os.path.join(DEFAULT_PROFILE_DIR, "face-presence-state.json")
 WARMUP_SECS = 3
 SETTLE_SECS = 3
 DEBOUNCE_SECS = 60
 MAX_LOG_BYTES = 1_000_000  # 1MB
+
+# Idle gating (Phase 1, 2026-09-03): an "auto" (90s-poll) check with no face
+# is only real telemetry if a face has been seen recently. Otherwise it is a
+# call app or browser tab left open with nobody in the chair, and it must not
+# pollute pre_call_check counts. See specs/ojo.md Phase 1 task 1.
+IDLE_GRACE_SECONDS = 10 * 60
 
 
 LAUNCHAGENT_LABEL = "com.camtune.daemon"
@@ -252,10 +259,14 @@ Respond with ONLY a JSON object (no markdown, no explanation):
     "auto_exposure_mode": 1,
     "env": {{
         "overhead_lights": {{"hue": 30, "saturation": 5, "brightness": 25}},
-        "accent_lamp": {{"hue": 25, "saturation": 20, "brightness": 20}}
+        "accent_lamp": {{"hue": 25, "saturation": 20, "brightness": 20}},
+        "office_blinds": {{"position": 40}}
     }}
 }}
 
+A control listed with a "position" range (like office_blinds) takes a single
+"position" value 0-100, not hue/saturation/brightness. 0 is fully closed,
+100 is fully open.
 "changes" should ONLY include camera settings that need adjustment.
 "env" should ONLY include lights that need adjustment. Omit lights that look good.
 If everything looks good, return empty changes and empty env.
@@ -384,10 +395,13 @@ def probe_env_reachability(env_config, timeout=25):
         cmd_template = ctrl.get("set_command", "")
         if not cmd_template:
             continue
-        # Extract the target group from the set_command (last word after office-lights.py)
+        # Extract the target group from the set_command (last word after the
+        # control script). Generalized 2026-09-03: any *.py control script,
+        # not just office-lights.py, so office-blinds.py (and any future
+        # env.json control) is reachability-checked the same way.
         parts = cmd_template.split()
         script_idx = next(
-            (i for i, p in enumerate(parts) if p.endswith("office-lights.py")), None
+            (i for i, p in enumerate(parts) if p.endswith(".py")), None
         )
         if script_idx is None:
             continue
@@ -475,16 +489,20 @@ def apply_env_changes(env_changes, env_config, dry_run=False):
         if not cmd_template:
             continue
 
-        # Substitute values into command template
-        cmd = cmd_template.format(
-            hue=values.get("hue", 0),
-            saturation=values.get("saturation", 0),
-            brightness=values.get("brightness", 0),
-        )
-
         tag = " (dry run)" if dry_run else ""
-        h, s, b = values.get("hue", 0), values.get("saturation", 0), values.get("brightness", 0)
-        applied.append(f"  {name}: H:{h} S:{s} B:{b}{tag}")
+        if ctrl.get("type") == "position":
+            position = values.get("position", 0)
+            cmd = cmd_template.format(position=position)
+            applied.append(f"  {name}: Position:{position}%{tag}")
+        else:
+            # Substitute values into command template
+            cmd = cmd_template.format(
+                hue=values.get("hue", 0),
+                saturation=values.get("saturation", 0),
+                brightness=values.get("brightness", 0),
+            )
+            h, s, b = values.get("hue", 0), values.get("saturation", 0), values.get("brightness", 0)
+            applied.append(f"  {name}: H:{h} S:{s} B:{b}{tag}")
 
         if not dry_run:
             try:
@@ -1027,6 +1045,47 @@ def _utc_now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _load_last_face_seen(path=FACE_PRESENCE_PATH):
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+        return float(payload.get("last_face_seen_at"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _save_last_face_seen(when, path=FACE_PRESENCE_PATH):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"last_face_seen_at": when}, f)
+    except OSError:
+        pass
+
+
+def gate_idle_check(scene, trigger, now=None, grace_seconds=IDLE_GRACE_SECONDS,
+                     presence_path=FACE_PRESENCE_PATH):
+    """Decide whether a no-face auto check is idle noise or a real check.
+
+    A face_detected scene always refreshes the "last seen" marker and is
+    never idle, regardless of trigger. A manual or calendar-triggered check
+    is never idle: Ryan (or a real upcoming call) asked for it directly. Only
+    an "auto" (90s poll) check with no face, where nobody has been seen in
+    the last `grace_seconds`, is classified idle. Returns True if this check
+    should be treated as idle (not counted as a real pre_call_check).
+    """
+    now = now if now is not None else time.time()
+    if scene.get("face_detected"):
+        _save_last_face_seen(now, path=presence_path)
+        return False
+    if trigger != "auto":
+        return False
+    last_seen = _load_last_face_seen(path=presence_path)
+    if last_seen is None:
+        return True
+    return (now - last_seen) > grace_seconds
+
+
 def _percentile(values, pct):
     if not values:
         return 0.0
@@ -1464,10 +1523,17 @@ def run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
     result["elapsed_ms"] = int((time.time() - start) * 1000)
     result["ts"] = _utc_now()
 
+    trigger = getattr(args, "trigger", "manual")
+    is_idle = gate_idle_check(scene, trigger)
+    if is_idle:
+        result["state"] = "idle"
+        result["reason"] = "no one in frame (idle)"
+
     if getattr(args, "log", False):
         event = {
             "ts": result["ts"],
-            "event_type": "pre_call_check",
+            "event_type": "idle_check" if is_idle else "pre_call_check",
+            "trigger": trigger,
             "state": result["state"],
             "reason": result["reason"],
             "camera_detected": True,
@@ -2223,6 +2289,12 @@ def main():
     check_parser.add_argument(
         "--light-timeout", type=float, default=1.0,
         help="Per-light status timeout in seconds (default: 1.0)",
+    )
+    check_parser.add_argument(
+        "--trigger", choices=["manual", "auto", "calendar"], default="manual",
+        help="Who asked for this check: manual click, the 90s auto-poll, or "
+             "the calendar pre-call script. Only 'auto' checks with no face "
+             "and nobody seen recently are gated as idle.",
     )
 
     # Restore subcommand

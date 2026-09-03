@@ -11,6 +11,26 @@ struct MenuContentView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     ReadinessView(state: state)
                     PrimaryActionsView(state: state)
+
+                    // Lights and curtains are the first screen, not behind a
+                    // disclosure or a tab. Ryan, 2026-09-03: "I want to be
+                    // able to easily control my lights and curtains... not
+                    // buried once I click on it."
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Lights")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        LightsControlView(state: state)
+                            .frame(maxHeight: 220)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Curtains")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        CurtainsControlView(state: state)
+                    }
+
                     FineTuneView(state: state)
                 }
                 .padding(.horizontal, 16)
@@ -335,6 +355,10 @@ private struct PrimaryActionsView: View {
     }
 }
 
+// Camera sliders and calibration/advanced controls. Lights and curtains
+// moved out of this disclosure (2026-09-03) onto the main popover screen —
+// see MenuContentView.body. This stays collapsed by default because Ryan
+// should not need to open it before an ordinary call.
 private struct FineTuneView: View {
     @Bindable var state: AppState
     @State private var isExpanded = false
@@ -355,9 +379,6 @@ private struct FineTuneView: View {
                 case .camera:
                     CameraControlsView(state: state)
                         .frame(maxHeight: 260)
-                case .lighting:
-                    LightsControlView(state: state)
-                        .frame(maxHeight: 260)
                 case .advanced:
                     AdvancedView(state: state)
                 }
@@ -365,7 +386,7 @@ private struct FineTuneView: View {
             .padding(.top, 8)
         } label: {
             HStack {
-                Text("Fine Tune")
+                Text("Camera & More")
                     .font(.headline)
                 Spacer()
                 Text("\(state.panTiltText) · \(state.zoomText)")
@@ -377,13 +398,11 @@ private struct FineTuneView: View {
 
     private enum FineTuneSection: CaseIterable {
         case camera
-        case lighting
         case advanced
 
         var title: String {
             switch self {
             case .camera: return "Camera"
-            case .lighting: return "Light"
             case .advanced: return "More"
             }
         }
@@ -391,7 +410,6 @@ private struct FineTuneView: View {
         var icon: String {
             switch self {
             case .camera: return "camera"
-            case .lighting: return "lightbulb"
             case .advanced: return "gearshape"
             }
         }

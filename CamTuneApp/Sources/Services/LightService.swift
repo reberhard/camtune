@@ -40,16 +40,29 @@ enum LightService {
                      hue: 35, saturation: 3, brightness: 45),
     ]
 
+    // Fixed 2026-09-03: this used to default to
+    // ~/.config/camtune/office-lights.py, which does not exist, so
+    // lightControlAvailable was false and every button in this view was a
+    // no-op. The real script (the one env.json/AI Tune already use) is at
+    // ~/clawd/scripts/office-lights.py. See specs/ojo.md Phase 1.
     private static var scriptPath: String {
         if let value = ProcessInfo.processInfo.environment["CAMTUNE_LIGHT_SCRIPT"], !value.isEmpty {
             return value
         }
         return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/camtune/office-lights.py").path
+            .appendingPathComponent("clawd/scripts/office-lights.py").path
     }
 
+    // office-lights.py imports `kasa`, which is only installed under
+    // Homebrew's python3.14, not the system /usr/bin/python3 (3.9). Using
+    // the bare interpreter name depends on which PATH the calling process
+    // happened to inherit; an absolute path removes that ambiguity for
+    // every caller (GUI app, daemon, or a shell).
+    private static let interpreterPath = "/opt/homebrew/bin/python3"
+
     static func isAvailable() -> Bool {
-        FileManager.default.isExecutableFile(atPath: scriptPath)
+        FileManager.default.isExecutableFile(atPath: interpreterPath)
+            && FileManager.default.fileExists(atPath: scriptPath)
     }
 
     static func applyScene(_ sceneId: String, target: String = "all") async throws {
@@ -63,7 +76,7 @@ enum LightService {
             args = [scriptPath, sceneId, target]
         }
         _ = try await ShellRunner.run(
-            executablePath: "/usr/bin/python3",
+            executablePath: interpreterPath,
             arguments: args,
             timeout: .seconds(15)
         )
@@ -74,7 +87,7 @@ enum LightService {
             throw LightError.unavailable
         }
         _ = try await ShellRunner.run(
-            executablePath: "/usr/bin/python3",
+            executablePath: interpreterPath,
             arguments: [scriptPath, "custom", "\(hue)", "\(saturation)", "\(brightness)", target],
             timeout: .seconds(15)
         )
@@ -85,7 +98,7 @@ enum LightService {
             throw LightError.unavailable
         }
         _ = try await ShellRunner.run(
-            executablePath: "/usr/bin/python3",
+            executablePath: interpreterPath,
             arguments: [scriptPath, "off", target],
             timeout: .seconds(15)
         )

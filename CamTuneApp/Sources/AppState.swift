@@ -144,6 +144,11 @@ final class AppState {
     var lightFixtures: [LightFixture] = LightService.defaultFixtures
     var linkKeyLights = true
 
+    // Curtains state
+    var curtainControlAvailable = false
+    var curtainStatusByTarget: [String: CurtainStatus] = [:]
+    var isCurtainBusy = false
+
     // TV state
     var audioRoute: AudioRoute = .tv
 
@@ -190,9 +195,13 @@ final class AppState {
         NotificationService.requestAuthorization()
         await refreshPermissionStatus()
         lightControlAvailable = LightService.isAvailable()
+        curtainControlAvailable = CurtainService.isAvailable()
         refreshDaemonStatus()
         savedProfileExists = ProfileService.exists()
         startAutomaticChecks()
+        if curtainControlAvailable {
+            Task { await refreshCurtainStatus() }
+        }
 
         do {
             let devices = try await UVCService.listDevices()
@@ -275,14 +284,24 @@ final class AppState {
         await performCheck(reason: reason, allowCached: reason != "manual" && reason != "framing fix" && reason != "meeting ready")
     }
 
+    /// Every reason a check can carry that did NOT come from the 90s
+    /// auto-poll. Anything else (a call app name from
+    /// activeVideoCallAppName) is an "auto" trigger for --trigger and for
+    /// ojo.py's idle gating.
+    private static let manualCheckReasons: Set<String> = [
+        "manual", "framing fix", "meeting ready",
+        "background guidance", "background fix", "lighting guidance",
+    ]
+
     private func performCheck(reason: String, allowCached: Bool) async {
         isChecking = true
         error = nil
         statusMessage = "Checking..."
         lastAutoCheckReason = reason == "manual" ? nil : reason
+        let trigger = Self.manualCheckReasons.contains(reason) ? "manual" : "auto"
 
         do {
-            var arguments = [ojoPath, "check", "--json", "--log"]
+            var arguments = [ojoPath, "check", "--json", "--log", "--trigger", trigger]
             if allowCached {
                 arguments.append(contentsOf: ["--max-age-seconds", "45"])
                 arguments.append("--skip-lights")
@@ -677,7 +696,8 @@ final class AppState {
               reason != "background fix",
               reason != "meeting ready",
               let state,
-              state.lowercased() != "green"
+              state.lowercased() != "green",
+              state.lowercased() != "idle" // empty room, not a real problem
         else { return }
 
         let now = Date()
@@ -734,6 +754,23 @@ final class AppState {
         }
         lastAutoCheck = now
         await checkNow(reason: appName)
+        await autoFixFramingIfNeeded()
+    }
+
+    /// Phase 1 (2026-09-03): when the 90s auto-poll finds a framing Yellow,
+    /// apply the same fix "Apply Framing Fix" already runs manually, instead
+    /// of leaving Ryan to notice and click something. Bounded to once per
+    /// auto-poll cycle (every 90s at most) since applyFramingRecommendation
+    /// re-checks with reason "framing fix", which is not an auto-trigger
+    /// reason and will not re-enter this function.
+    private func autoFixFramingIfNeeded() async {
+        guard currentDevice != nil else { return } // UVC nudges need the Brio
+        guard preCallState?.lowercased() == "yellow" else { return }
+        let issue = (preCallReason ?? "").lowercased()
+        guard issue.contains("headroom") || issue.contains("too far")
+            || issue.contains("face too small") || issue.contains("face too large")
+        else { return }
+        await applyFramingRecommendation(recheck: true)
     }
 
     private func activeVideoCallAppName() -> String? {
@@ -1203,6 +1240,50 @@ final class AppState {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    // MARK: - Curtains
+
+    func refreshCurtainStatus() async {
+        guard curtainControlAvailable, !isCurtainBusy else { return }
+        do {
+            let status = try await CurtainService.status(target: "both")
+            curtainStatusByTarget = status
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func openCurtains(target: String) async {
+        await runCurtainCommand(statusMessage: "Opening \(target)...") {
+            try await CurtainService.open(target: target)
+        }
+    }
+
+    func closeCurtains(target: String) async {
+        await runCurtainCommand(statusMessage: "Closing \(target)...") {
+            try await CurtainService.close(target: target)
+        }
+    }
+
+    func setCurtainPosition(_ percent: Int, target: String) async {
+        await runCurtainCommand(statusMessage: "Setting \(target) to \(percent)%...") {
+            try await CurtainService.setPosition(percent, target: target)
+        }
+    }
+
+    private func runCurtainCommand(statusMessage: String, _ action: @escaping () async throws -> Void) async {
+        guard curtainControlAvailable, !isCurtainBusy else { return }
+        isCurtainBusy = true
+        self.statusMessage = statusMessage
+        do {
+            try await action()
+        } catch {
+            self.error = error.localizedDescription
+        }
+        await refreshCurtainStatus()
+        isCurtainBusy = false
+        self.statusMessage = nil
     }
 
     func applyFixtureHSV(index: Int) async {
