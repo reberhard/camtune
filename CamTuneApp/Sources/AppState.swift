@@ -307,6 +307,13 @@ final class AppState {
                 arguments.append("--skip-lights")
             } else if reason == "manual" {
                 arguments.append(contentsOf: ["--light-timeout", "0.8"])
+            } else if reason == "framing fix" {
+                // A pan/tilt/zoom nudge cannot change light or curtain
+                // reachability, so this recheck doesn't need to re-probe
+                // them. Found live 2026-09-03: with 2 of 4 lights offline,
+                // this alone was adding ~1.3s+ to every "Fix Framing" click
+                // on top of an already-slow ~4.4s camera-only check.
+                arguments.append("--skip-lights")
             }
             let output = try await ShellRunner.run(
                 executablePath: "/usr/bin/python3",
@@ -594,6 +601,16 @@ final class AppState {
                 qualityScore: preCallQualityScore
             )
             savedProfileExists = true
+            // Phase 2 (2026-09-03): also bank this into the real
+            // time-bucket profile map (specs/ojo.md), so the classifier's
+            // profile-freshness check has a real, bucket-aware entry for
+            // right now instead of only the single profile.json's mtime.
+            // Best-effort: profile.json is already saved above regardless.
+            _ = try? await ShellRunner.run(
+                executablePath: "/usr/bin/python3",
+                arguments: [ojoPath, "profiles", "--save", "--json", "--skip-lights"],
+                timeout: .seconds(15)
+            )
             statusMessage = "Profile saved"
             try? await Task.sleep(for: .seconds(2))
             statusMessage = nil

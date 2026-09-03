@@ -17,6 +17,7 @@ Requires: imagesnap (brew), uvcc (npm), anthropic (pip), pyobjc-framework-Quartz
 
 import argparse
 import base64
+import calendar
 import json
 import math
 import os
@@ -1125,6 +1126,33 @@ def _profile_age_minutes(profile_path=DEFAULT_PROFILE_PATH):
         return None
 
 
+def _parse_utc_iso(ts):
+    try:
+        return calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return None
+
+
+def bucket_profile_age_minutes(profile_map=None, bucket=None, now=None):
+    """Age in minutes of the current time-bucket's profile-map entry, or
+    None if no map entry exists for this bucket. Phase 2 (2026-09-03):
+    profile freshness should mean "do we have a good profile for right now
+    in this room," not "was profile.json touched recently" — a fixed-room
+    product with four lighting conditions needs bucket-aware staleness, or
+    Green becomes unreachable in three of the four buckets by definition.
+    """
+    profile_map = profile_map if profile_map is not None else load_profile_map()
+    bucket = bucket or current_time_bucket()
+    entry = profile_map.get("profiles", {}).get(bucket)
+    if not entry:
+        return None
+    updated_at = _parse_utc_iso(entry.get("updated_at", ""))
+    if updated_at is None:
+        return None
+    now = now if now is not None else time.time()
+    return int((now - updated_at) / 60)
+
+
 def current_time_bucket(now=None):
     now = now or time.localtime()
     hour = now.tm_hour
@@ -1273,7 +1301,13 @@ def describe_scene(image_path, face_bboxes, light_status=None, profile_path=DEFA
     means = [sum(channel) / count for channel in zip(*pixels)]
     avg_rgb = sum(means) / 3 if means else 1.0
     rgb_balance = [round(v / avg_rgb, 3) if avg_rgb else 1.0 for v in means]
-    profile_age = _profile_age_minutes(profile_path)
+    bucket_age = bucket_profile_age_minutes()
+    if bucket_age is not None:
+        profile_age = bucket_age
+        profile_source = "map"
+    else:
+        profile_age = _profile_age_minutes(profile_path)
+        profile_source = "single_file"
     offline = [name for name, status in light_status.items() if status == "offline"]
     degraded = [name for name, status in light_status.items() if status == "degraded"]
 
@@ -1290,6 +1324,7 @@ def describe_scene(image_path, face_bboxes, light_status=None, profile_path=DEFA
         "shadow_clip_pct": round(sum(1 for v in lumas if v <= 10) / count * 100, 3),
         "rgb_balance": rgb_balance,
         "profile_age_minutes": profile_age,
+        "profile_source": profile_source,
         "profile_exists": profile_age is not None,
         "lights_reachable": not offline,
         "lights_degraded": bool(degraded),
@@ -1624,6 +1659,32 @@ def cmd_profiles(args):
     else:
         available = "available" if status["profile_available"] else "missing"
         print(f"{status['bucket']}: {available} ({output['profile_count']} profiles)")
+    return output
+
+
+def cmd_save_profile(args, camera_name, vendor, product):
+    """Save the current UVC settings + current scene into the current
+    time-bucket's profile-map entry. Phase 2 (2026-09-03): the only prior
+    way to populate lighting-profiles.json was through `calibrate`'s
+    accept path, which is gated on AI repair actually being needed — a
+    scene that already looks fine (the common case when someone just wants
+    to bank "this is what good looks like right now for this time of day")
+    would skip AI Tune and never write a profile entry at all. This command
+    saves whatever the camera is set to right now, no AI Tune required.
+    """
+    result = run_pre_call_check(args, camera_name, profile_path=args.profile)
+    settings = get_current_settings(vendor, product)
+    profile = update_profile_map(settings, result["scene"], profile_map_path=args.profile_map)
+    output = {
+        "bucket": profile["time_bucket"],
+        "state": result["state"],
+        "reason": result["reason"],
+        "look_score": profile["quality"]["look_score"],
+    }
+    if args.json:
+        print(json.dumps(output, sort_keys=True))
+    else:
+        print(f"Saved profile for {output['bucket']} (look score {output['look_score']}).")
     return output
 
 
@@ -2318,7 +2379,7 @@ def main():
             help="Print the JSONL row without writing it",
         )
 
-    profiles_parser = sub.add_parser("profiles", help="Inspect profile-map status")
+    profiles_parser = sub.add_parser("profiles", help="Inspect or update profile-map status")
     profiles_parser.add_argument(
         "--json", action="store_true",
         help="Print machine-readable profile-map status",
@@ -2326,6 +2387,24 @@ def main():
     profiles_parser.add_argument(
         "--profile-map", default=PROFILE_MAP_PATH,
         help=f"Profile-map path (default: {PROFILE_MAP_PATH})",
+    )
+    profiles_parser.add_argument(
+        "--save", action="store_true",
+        help="Save the current camera settings + scene into the current "
+             "time-bucket's profile-map entry (needs a UVC camera; unlike "
+             "`calibrate`, does not require AI repair to be needed first)",
+    )
+    profiles_parser.add_argument(
+        "--skip-lights", action="store_true",
+        help="Skip light/curtain reachability probes when saving (faster)",
+    )
+    profiles_parser.add_argument(
+        "--light-timeout", type=float, default=1.0,
+        help="Per-light status timeout in seconds when saving (default: 1.0)",
+    )
+    profiles_parser.add_argument(
+        "--warmup-seconds", type=int, default=1,
+        help="Camera warmup for raw capture when saving (default: 1)",
     )
 
     calibrate_parser = sub.add_parser(
@@ -2382,7 +2461,7 @@ def main():
         cmd_feedback(args)
         return
 
-    if args.command == "profiles":
+    if args.command == "profiles" and not getattr(args, "save", False):
         cmd_profiles(args)
         return
 
@@ -2400,7 +2479,7 @@ def main():
             daemon_parser.print_help()
         return
 
-    check_dependencies(require_claude=args.command not in ("check", "calibrate"))
+    check_dependencies(require_claude=args.command not in ("check", "calibrate", "profiles"))
 
     camera_name, vendor, product = detect_camera(preferred=args.camera)
 
@@ -2415,6 +2494,8 @@ def main():
         sys.exit(1)
     elif args.command == "calibrate":
         cmd_calibrate(args, camera_name, vendor, product)
+    elif args.command == "profiles":
+        cmd_save_profile(args, camera_name, vendor, product)
     elif args.command == "restore":
         print(f"Camera: {camera_name}")
         restore_profile(vendor, product, args.profile)

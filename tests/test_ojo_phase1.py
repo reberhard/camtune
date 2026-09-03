@@ -115,3 +115,45 @@ def test_probe_env_reachability_reports_degraded_on_partial(monkeypatch):
     monkeypatch.setattr(ojo.subprocess, "run", fake_run)
     status = ojo.probe_env_reachability(BLINDS_CONTROL)
     assert status == {"office_blinds": "degraded"}
+
+
+# --- Phase 2: bucket-aware profile freshness (2026-09-03) ---
+
+
+def test_parse_utc_iso_round_trips_utc_now_format():
+    ts = ojo._utc_now()
+    parsed = ojo._parse_utc_iso(ts)
+    assert parsed is not None
+    assert abs(parsed - time.time()) < 5
+
+
+def test_parse_utc_iso_returns_none_for_garbage():
+    assert ojo._parse_utc_iso("not a timestamp") is None
+    assert ojo._parse_utc_iso(None) is None
+
+
+def test_bucket_profile_age_minutes_none_when_no_entry_for_bucket():
+    profile_map = {"schema_version": 1, "profiles": {}}
+    age = ojo.bucket_profile_age_minutes(profile_map=profile_map, bucket="afternoon", now=1000.0)
+    assert age is None
+
+
+def test_bucket_profile_age_minutes_computes_from_updated_at():
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1000.0))
+    profile_map = {"schema_version": 1, "profiles": {"afternoon": {"updated_at": ts}}}
+    now = 1000.0 + 600  # 10 minutes later
+    age = ojo.bucket_profile_age_minutes(profile_map=profile_map, bucket="afternoon", now=now)
+    assert age == 10
+
+
+def test_bucket_profile_age_minutes_none_for_unparseable_updated_at():
+    profile_map = {"schema_version": 1, "profiles": {"afternoon": {"updated_at": "garbage"}}}
+    age = ojo.bucket_profile_age_minutes(profile_map=profile_map, bucket="afternoon", now=1000.0)
+    assert age is None
+
+
+def test_current_time_bucket_boundaries():
+    assert ojo.current_time_bucket(time.strptime("2026-01-01 08:00", "%Y-%m-%d %H:%M")) == "morning"
+    assert ojo.current_time_bucket(time.strptime("2026-01-01 12:00", "%Y-%m-%d %H:%M")) == "midday"
+    assert ojo.current_time_bucket(time.strptime("2026-01-01 17:00", "%Y-%m-%d %H:%M")) == "afternoon"
+    assert ojo.current_time_bucket(time.strptime("2026-01-01 21:00", "%Y-%m-%d %H:%M")) == "evening"
