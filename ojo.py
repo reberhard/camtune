@@ -38,6 +38,7 @@ EVENTS_PATH = os.path.join(DEFAULT_PROFILE_DIR, "events.jsonl")
 FEEDBACK_PATH = os.path.join(DEFAULT_PROFILE_DIR, "feedback.jsonl")
 COMMENTS_PATH = os.path.join(DEFAULT_PROFILE_DIR, "comments.jsonl")
 CHECK_CACHE_PATH = os.path.join(DEFAULT_PROFILE_DIR, "pre-call-check-cache.json")
+CALLS_PATH = os.path.join(DEFAULT_PROFILE_DIR, "calls.jsonl")
 FACE_PRESENCE_PATH = os.path.join(DEFAULT_PROFILE_DIR, "face-presence-state.json")
 WARMUP_SECS = 3
 SETTLE_SECS = 3
@@ -1627,6 +1628,61 @@ def build_feedback_event(kind, note, call_session_id=None, snapshot=None):
     }
 
 
+def build_call_rollup(
+    app, session_id, started_at, ended_at,
+    checks_run, reached_green, worst_state, final_state, rescue_count,
+):
+    """One row per detected call, written when the call ends. Phase 2
+    (2026-09-04): the leading metrics in specs/ojo.md ("share of call
+    starts that reached Green", "manual rescue events per week") need a
+    per-call summary, not just per-check rows — this is that summary.
+    """
+    start_epoch = _parse_utc_iso(started_at)
+    end_epoch = _parse_utc_iso(ended_at)
+    duration = int(end_epoch - start_epoch) if start_epoch and end_epoch else None
+    return {
+        "ts": ended_at,
+        "event_type": "call_rollup",
+        "call_session_id": session_id,
+        "app": app,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "duration_seconds": duration,
+        "checks_run": checks_run,
+        "reached_green": reached_green,
+        "worst_state": worst_state,
+        "final_state": final_state,
+        "rescue_count": rescue_count,
+    }
+
+
+def cmd_log_call(args):
+    """Write a call rollup row. Called by the Swift app when a call
+    session ends (activeVideoCallAppName transitions back to nil).
+    """
+    row = build_call_rollup(
+        app=args.app,
+        session_id=args.call_session_id,
+        started_at=args.started_at,
+        ended_at=args.ended_at,
+        checks_run=args.checks_run,
+        reached_green=args.reached_green,
+        worst_state=args.worst_state,
+        final_state=args.final_state,
+        rescue_count=args.rescue_count,
+    )
+    if args.dry_run:
+        print(json.dumps(row, sort_keys=True))
+        return row
+    _append_jsonl(CALLS_PATH, row)
+    if args.json:
+        print(json.dumps(row, sort_keys=True))
+    else:
+        print(f"Logged call rollup: {args.app} ({row['duration_seconds']}s, "
+              f"green={args.reached_green}, rescues={args.rescue_count})")
+    return row
+
+
 def cmd_feedback(args):
     path = FEEDBACK_PATH if args.feedback_kind == "bad" else COMMENTS_PATH
     snapshot = load_recent_check_cache(10 * 60)
@@ -2379,6 +2435,25 @@ def main():
             help="Print the JSONL row without writing it",
         )
 
+    # Calls subcommand (Phase 2: per-call rollups)
+    calls_parser = sub.add_parser("calls", help="Log a call rollup to calls.jsonl")
+    calls_sub = calls_parser.add_subparsers(dest="calls_action", required=True)
+    log_parser = calls_sub.add_parser("log", help="Record one finished call's summary")
+    log_parser.add_argument("--app", required=True, help="Detected call app name, e.g. Zoom")
+    log_parser.add_argument("--call-session-id", required=True)
+    log_parser.add_argument("--started-at", required=True, help="ISO8601 UTC, e.g. 2026-09-04T14:00:00Z")
+    log_parser.add_argument("--ended-at", required=True, help="ISO8601 UTC")
+    log_parser.add_argument("--checks-run", type=int, default=0)
+    log_parser.add_argument("--reached-green", action="store_true")
+    log_parser.add_argument("--worst-state", default=None)
+    log_parser.add_argument("--final-state", default=None)
+    log_parser.add_argument("--rescue-count", type=int, default=0)
+    log_parser.add_argument("--json", action="store_true")
+    log_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the JSONL row without writing it",
+    )
+
     profiles_parser = sub.add_parser("profiles", help="Inspect or update profile-map status")
     profiles_parser.add_argument(
         "--json", action="store_true",
@@ -2459,6 +2534,10 @@ def main():
 
     if args.command == "feedback":
         cmd_feedback(args)
+        return
+
+    if args.command == "calls":
+        cmd_log_call(args)
         return
 
     if args.command == "profiles" and not getattr(args, "save", False):

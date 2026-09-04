@@ -157,3 +157,26 @@ def test_current_time_bucket_boundaries():
     assert ojo.current_time_bucket(time.strptime("2026-01-01 12:00", "%Y-%m-%d %H:%M")) == "midday"
     assert ojo.current_time_bucket(time.strptime("2026-01-01 17:00", "%Y-%m-%d %H:%M")) == "afternoon"
     assert ojo.current_time_bucket(time.strptime("2026-01-01 21:00", "%Y-%m-%d %H:%M")) == "evening"
+
+
+# --- Phase 2: call rollups (2026-09-04) ---
+
+
+def test_build_call_rollup_computes_duration():
+    row = ojo.build_call_rollup(
+        app="Zoom", session_id="abc", started_at="2026-09-04T14:00:00Z",
+        ended_at="2026-09-04T14:05:30Z", checks_run=4, reached_green=True,
+        worst_state="yellow", final_state="green", rescue_count=0,
+    )
+    assert row["event_type"] == "call_rollup"
+    assert row["duration_seconds"] == 330
+    assert row["reached_green"] is True
+
+
+def test_build_call_rollup_duration_none_when_timestamps_unparseable():
+    row = ojo.build_call_rollup(
+        app="Zoom", session_id="abc", started_at="garbage",
+        ended_at="also garbage", checks_run=0, reached_green=False,
+        worst_state=None, final_state=None, rescue_count=0,
+    )
+    assert row["duration_seconds"] is None

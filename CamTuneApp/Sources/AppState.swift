@@ -149,6 +149,11 @@ final class AppState {
     var curtainStatusByTarget: [String: CurtainStatus] = [:]
     var isCurtainBusy = false
 
+    // Call session tracking (Phase 2, 2026-09-04): bounded by
+    // activeVideoCallAppName() transitions in runAutomaticCheckIfNeeded.
+    // Written to calls.jsonl on session end via `ojo.py calls log`.
+    private var activeCallSession: CallSession?
+
     // TV state
     var audioRoute: AudioRoute = .tv
 
@@ -576,9 +581,16 @@ final class AppState {
                     qualityScore: preCallQualityScore
                 )
             }
+            if kind == "bad" {
+                activeCallSession?.rescueCount += 1
+            }
+            var arguments = [ojoPath, "feedback", kind, "--note", note]
+            if let sessionID = activeCallSession?.id {
+                arguments.append(contentsOf: ["--call-session-id", sessionID])
+            }
             _ = try await ShellRunner.run(
                 executablePath: "/usr/bin/python3",
-                arguments: [ojoPath, "feedback", kind, "--note", note],
+                arguments: arguments,
                 timeout: .seconds(10)
             )
             statusMessage = kind == "bad" ? "Marked bad" : "Comment logged"
@@ -761,8 +773,15 @@ final class AppState {
     private func runAutomaticCheckIfNeeded() async {
         guard autoCheckEnabled else { return }
         guard let appName = activeVideoCallAppName() else {
+            if detectedCallApp != nil {
+                await finishCallSession() // call just ended
+            }
             detectedCallApp = nil
             return
+        }
+        if activeCallSession == nil {
+            activeCallSession = CallSession(
+                id: UUID().uuidString, app: appName, startedAt: Date())
         }
         detectedCallApp = appName
         let now = Date()
@@ -771,7 +790,37 @@ final class AppState {
         }
         lastAutoCheck = now
         await checkNow(reason: appName)
+        activeCallSession?.record(state: preCallState)
         await autoFixFramingIfNeeded()
+    }
+
+    private static let iso8601 = ISO8601DateFormatter()
+
+    /// Phase 2 (2026-09-04): writes the call rollup ojo.py's classifier and
+    /// specs/ojo.md's leading metrics need — see build_call_rollup in
+    /// ojo.py. Fire-and-forget: a rollup failing to write must never block
+    /// or error the actual call-ended state transition.
+    private func finishCallSession() async {
+        guard let session = activeCallSession else { return }
+        activeCallSession = nil
+        var arguments = [
+            ojoPath, "calls", "log",
+            "--app", session.app,
+            "--call-session-id", session.id,
+            "--started-at", Self.iso8601.string(from: session.startedAt),
+            "--ended-at", Self.iso8601.string(from: Date()),
+            "--checks-run", "\(session.checksRun)",
+            "--rescue-count", "\(session.rescueCount)",
+        ]
+        if session.reachedGreen { arguments.append("--reached-green") }
+        if let worst = session.worstState {
+            arguments.append(contentsOf: ["--worst-state", worst])
+        }
+        if let final = preCallState {
+            arguments.append(contentsOf: ["--final-state", final])
+        }
+        _ = try? await ShellRunner.run(
+            executablePath: "/usr/bin/python3", arguments: arguments, timeout: .seconds(10))
     }
 
     /// Phase 1 (2026-09-03): when the 90s auto-poll finds a framing Yellow,
@@ -1396,6 +1445,36 @@ final class AppState {
             try await UVCService.set(
                 control: control, value: clamped,
                 vendor: device.vendor, product: device.product)
+        }
+    }
+}
+
+private struct CallSession {
+    let id: String
+    let app: String
+    let startedAt: Date
+    var checksRun: Int = 0
+    var reachedGreen: Bool = false
+    var worstState: String?
+    var rescueCount: Int = 0
+
+    /// green < yellow < red. "idle" (empty room) never counts as worst,
+    /// since it isn't a real problem with the call scene.
+    private static func rank(_ state: String) -> Int {
+        switch state.lowercased() {
+        case "green": return 0
+        case "yellow": return 1
+        case "red": return 2
+        default: return -1 // idle, unknown — never worse than a real state
+        }
+    }
+
+    mutating func record(state: String?) {
+        guard let state, Self.rank(state) >= 0 else { return }
+        checksRun += 1
+        if state.lowercased() == "green" { reachedGreen = true }
+        if worstState == nil || Self.rank(state) > Self.rank(worstState!) {
+            worstState = state
         }
     }
 }
