@@ -311,7 +311,14 @@ final class AppState {
                 arguments.append(contentsOf: ["--max-age-seconds", "45"])
                 arguments.append("--skip-lights")
             } else if reason == "manual" {
-                arguments.append(contentsOf: ["--light-timeout", "0.8"])
+                // Found live 2026-09-04: 0.8s was even tighter than
+                // ojo.py's old 1.0s default, which was already reading
+                // genuinely-reachable-but-slow bulbs as offline. Probing is
+                // now parallelized across controls in ojo.py, so this no
+                // longer costs 0.8s-times-however-many-lights; 3.0s gives a
+                // real bulb a fair chance while staying well under what
+                // Ryan is willing to wait for on a manual click.
+                arguments.append(contentsOf: ["--light-timeout", "3.0"])
             } else if reason == "framing fix" {
                 // A pan/tilt/zoom nudge cannot change light or curtain
                 // reachability, so this recheck doesn't need to re-probe

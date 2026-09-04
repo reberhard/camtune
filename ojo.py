@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 __version__ = "2.1.0"
 
@@ -381,49 +382,73 @@ def load_env_config():
         return None
 
 
-def probe_env_reachability(env_config, timeout=25):
-    """Probe which environment lights are reachable.
+def _probe_one_control(ctrl, timeout):
+    """Probe a single env.json control's reachability. Returns
+    (name, status) or None if the control's set_command can't be parsed.
+    """
+    cmd_template = ctrl.get("set_command", "")
+    if not cmd_template:
+        return None
+    # Extract the target group from the set_command (last word after the
+    # control script). Generalized 2026-09-03: any *.py control script,
+    # not just office-lights.py, so office-blinds.py (and any future
+    # env.json control) is reachability-checked the same way.
+    parts = cmd_template.split()
+    script_idx = next(
+        (i for i, p in enumerate(parts) if p.endswith(".py")), None
+    )
+    if script_idx is None:
+        return None
+    target = parts[-1] if parts[-1] not in ("{hue}", "{saturation}", "{brightness}") else "all"
+    script_path = parts[script_idx]
+    try:
+        r = subprocess.run(
+            [parts[0], script_path, "status", target],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        output = r.stdout + r.stderr
+        if r.returncode == 0:
+            return ctrl["name"], "online"
+        if "Reachable: 0/" in output:
+            return ctrl["name"], "offline"
+        return ctrl["name"], "degraded"  # partial: some bulbs OK, some failed
+    except (subprocess.TimeoutExpired, OSError):
+        return ctrl["name"], "offline"
+
+
+def probe_env_reachability(env_config, timeout=8.0):
+    """Probe which environment controls (lights, blinds) are reachable, in
+    parallel across controls.
 
     Returns dict mapping control name to status:
-      "online"   - all bulbs in group responding
-      "degraded" - some bulbs responding, some not
-      "offline"  - no bulbs responding or command failed entirely
+      "online"   - all bulbs/motors in group responding
+      "degraded" - some responding, some not
+      "offline"  - none responding or command failed entirely
+
+    Timeout raised from 1.0s to 8.0s and probing parallelized across
+    controls 2026-09-04, found live: kasa's own discovery can legitimately
+    take several seconds for a real, reachable-but-slow bulb (observed ~10s
+    for one bulb in a single-bulb probe the night before), so a 1.0s per-
+    control timeout was reading genuinely-online-but-slow lights as
+    "offline" — corrupting the classifier's lights check, not just a slow
+    UI. Parallelizing across controls means N controls no longer cost N
+    times the timeout; the check only waits as long as the slowest one.
+    Known remaining gap, not fixed here: office-lights.py's own per-bulb
+    loop inside a single control (e.g. two bulbs under "overheads") is
+    still sequential, so a control covering multiple slow bulbs can still
+    exceed this timeout in the worst case — a deeper fix belongs in that
+    script, not here.
     """
     if not env_config or not env_config.get("controls"):
         return {}
 
+    controls = env_config["controls"]
     status = {}
-    for ctrl in env_config["controls"]:
-        cmd_template = ctrl.get("set_command", "")
-        if not cmd_template:
-            continue
-        # Extract the target group from the set_command (last word after the
-        # control script). Generalized 2026-09-03: any *.py control script,
-        # not just office-lights.py, so office-blinds.py (and any future
-        # env.json control) is reachability-checked the same way.
-        parts = cmd_template.split()
-        script_idx = next(
-            (i for i, p in enumerate(parts) if p.endswith(".py")), None
-        )
-        if script_idx is None:
-            continue
-        target = parts[-1] if parts[-1] not in ("{hue}", "{saturation}", "{brightness}") else "all"
-        script_path = parts[script_idx]
-        try:
-            r = subprocess.run(
-                [parts[0], script_path, "status", target],
-                capture_output=True, text=True, timeout=timeout,
-            )
-            output = r.stdout + r.stderr
-            if r.returncode == 0:
-                status[ctrl["name"]] = "online"
-            elif "Reachable: 0/" in output:
-                status[ctrl["name"]] = "offline"
-            else:
-                # Partial: some bulbs OK, some failed
-                status[ctrl["name"]] = "degraded"
-        except (subprocess.TimeoutExpired, OSError):
-            status[ctrl["name"]] = "offline"
+    with ThreadPoolExecutor(max_workers=max(1, len(controls))) as pool:
+        for result in pool.map(lambda c: _probe_one_control(c, timeout), controls):
+            if result is not None:
+                name, state = result
+                status[name] = state
 
     return status
 
@@ -1540,7 +1565,7 @@ def run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
     if getattr(args, "skip_lights", False):
         light_status = {}
     else:
-        light_status = probe_env_reachability(env_config, timeout=getattr(args, "light_timeout", 1.5))
+        light_status = probe_env_reachability(env_config, timeout=getattr(args, "light_timeout", 8.0))
     capture_path = getattr(args, "capture_path", CAPTURE_PATH)
     warmup_secs = getattr(args, "warmup_seconds", 1)
 
@@ -1780,7 +1805,7 @@ def cmd_calibrate(args, camera_name, vendor, product):
         json=True,
         profile=args.profile,
         skip_lights=False,
-        light_timeout=1.0,
+        light_timeout=8.0,  # accuracy over speed: calibrate decides whether AI Tune runs
         warmup_seconds=1,
     )
     pre = run_pre_call_check(pre_args, camera_name, profile_path=args.profile)
@@ -2404,8 +2429,8 @@ def main():
         help="Skip light reachability probes for a faster camera-only check",
     )
     check_parser.add_argument(
-        "--light-timeout", type=float, default=1.0,
-        help="Per-light status timeout in seconds (default: 1.0)",
+        "--light-timeout", type=float, default=8.0,
+        help="Per-light status timeout in seconds (default: 8.0)",
     )
     check_parser.add_argument(
         "--trigger", choices=["manual", "auto", "calendar"], default="manual",
@@ -2474,8 +2499,8 @@ def main():
         help="Skip light/curtain reachability probes when saving (faster)",
     )
     profiles_parser.add_argument(
-        "--light-timeout", type=float, default=1.0,
-        help="Per-light status timeout in seconds when saving (default: 1.0)",
+        "--light-timeout", type=float, default=8.0,
+        help="Per-light status timeout in seconds when saving (default: 8.0)",
     )
     profiles_parser.add_argument(
         "--warmup-seconds", type=int, default=1,

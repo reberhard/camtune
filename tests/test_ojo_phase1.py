@@ -180,3 +180,34 @@ def test_build_call_rollup_duration_none_when_timestamps_unparseable():
         worst_state=None, final_state=None, rescue_count=0,
     )
     assert row["duration_seconds"] is None
+
+
+# --- Phase 2 follow-up: parallel light-reachability probing (2026-09-04) ---
+
+
+def test_probe_env_reachability_runs_controls_in_parallel(monkeypatch):
+    """Three controls each taking ~0.2s should finish in ~0.2s total, not 0.6s,
+    if they're actually probed concurrently rather than one at a time."""
+    def fake_run(args, capture_output, text, timeout):
+        time.sleep(0.2)
+        return subprocess.CompletedProcess(args, 0, stdout="Reachable: 1/1\n", stderr="")
+
+    monkeypatch.setattr(ojo.subprocess, "run", fake_run)
+    config = {"controls": [
+        {"name": f"light_{i}", "set_command": f"/opt/homebrew/bin/python3 /fake/light_{i}.py status all"}
+        for i in range(3)
+    ]}
+    start = time.time()
+    status = ojo.probe_env_reachability(config, timeout=5.0)
+    elapsed = time.time() - start
+    assert status == {"light_0": "online", "light_1": "online", "light_2": "online"}
+    assert elapsed < 0.5, f"expected ~0.2s in parallel, took {elapsed:.2f}s (looks sequential)"
+
+
+def test_probe_env_reachability_default_timeout_is_generous():
+    # Regression guard: this was 1.0s, which live testing showed reads a
+    # genuinely-reachable-but-slow bulb as offline. It should not silently
+    # drop back down.
+    import inspect
+    default = inspect.signature(ojo.probe_env_reachability).parameters["timeout"].default
+    assert default >= 5.0
