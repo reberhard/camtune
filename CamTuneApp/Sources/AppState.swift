@@ -12,6 +12,7 @@ private let ojoStateURL: URL = {
 
 private let faceWhiteLumaWarn = 126.0
 private let faceWhiteSeparationWarn = 55.0
+private let faceCrownHeightMultiplier = 0.55
 
 enum OjoTab: String, CaseIterable {
     case status = "Status"
@@ -73,7 +74,10 @@ struct SceneMetrics: Sendable {
         self.faceBox = faceBox
         faceCenterX = faceBox.midX
         faceCenterY = faceBox.midY
-        headroomPct = faceBox.minY
+        // Vision's face rectangle starts below the crown. Use an estimated
+        // crown for composition so Ojo does not call empty facial space
+        // "headroom" and show a misleadingly low-in-frame face as balanced.
+        headroomPct = max(0, faceBox.minY - faceBox.height * faceCrownHeightMultiplier)
         faceHeightPct = faceBox.height
         self.faceLumaMean = faceLumaMean
         self.backgroundLumaMean = backgroundLumaMean

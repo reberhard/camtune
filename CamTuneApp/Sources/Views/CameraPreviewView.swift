@@ -40,7 +40,10 @@ final class CameraPreviewNSView: NSView {
         guard let session else { return }
 
         let layer = AVCaptureVideoPreviewLayer(session: session)
-        layer.videoGravity = .resizeAspectFill
+        // Composition guidance must describe the complete camera image. An
+        // aspect-filled preview silently crops edges, which can make it
+        // disagree with the frame a video-call app receives.
+        layer.videoGravity = .resizeAspect
         layer.frame = bounds
         self.layer?.addSublayer(layer)
         previewLayer = layer

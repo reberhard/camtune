@@ -342,6 +342,12 @@ FACE_WHITE_P95_WARN = 195
 FACE_WHITE_TONAL_RANGE_WARN = 130
 FACE_WHITE_SEPARATION_WARN = 55
 
+# Vision's face rectangle begins around the forehead/eyebrows, not at the
+# crown. Composition needs the visible top of the head, so estimate that
+# missing space from the detected face height. This is deliberately shared
+# with the live Swift preview calculation below.
+FACE_CROWN_HEIGHT_MULTIPLIER = 0.55
+
 # Non-call processes that trigger camera events but aren't video calls.
 def _read_state():
     """Read the shared state file (written by CamTune.app)."""
@@ -1269,7 +1275,11 @@ def framing_metrics(face_bbox):
     x, y, w, h = face_bbox
     center_x = x + w / 2
     center_y = y + h / 2
-    headroom = 1 - (y + h)
+    # Vision coordinates start at the lower-left. Its bounding rectangle is a
+    # face rectangle, rather than a head silhouette, so raw face-top space
+    # overstates the actual headroom seen on a call.
+    face_top = 1 - (y + h)
+    headroom = max(0.0, face_top - h * FACE_CROWN_HEIGHT_MULTIPLIER)
     issues = []
     if center_x < 0.38:
         issues.append("face too far left")

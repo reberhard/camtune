@@ -63,6 +63,24 @@ def test_classifier_yellow_when_lights_unreachable_but_scene_ok():
     assert result["checks"]["lights"]["reason"] == "lights unreachable but scene metrics are acceptable"
 
 
+def test_framing_uses_estimated_crown_not_vision_face_top():
+    # Vision's box starts at the face, below the crown. A face whose raw top
+    # is 30% from the image top has approximately 13.5% actual headroom when
+    # its height is 30% of the frame.
+    result = ojo.framing_metrics([0.35, 0.40, 0.30, 0.30])
+
+    assert result["headroom_pct"] == 0.135
+    assert result["framing_state"] == "green"
+
+
+def test_framing_still_flags_genuinely_excessive_headroom():
+    # A low face remains a framing problem after the crown correction.
+    result = ojo.framing_metrics([0.35, 0.05, 0.30, 0.30])
+
+    assert result["headroom_pct"] == 0.485
+    assert "too much headroom" in result["framing_reason"]
+
+
 def test_classifier_red_when_lights_unreachable_and_scene_needs_light():
     result = ojo.classify_scene(base_scene(
         lights_reachable=False,
