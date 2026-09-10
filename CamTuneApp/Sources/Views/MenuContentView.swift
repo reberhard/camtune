@@ -121,6 +121,10 @@ struct MenuContentView: View {
 
             SceneQualityPillsView(scene: state.lastScene)
                 .padding(.horizontal, 16)
+
+            QuickFramingControlsView(state: state)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
         } else {
             RoundedRectangle(cornerRadius: 8)
                 .fill(.quaternary)
@@ -143,6 +147,84 @@ struct MenuContentView: View {
         if state.isCalibrating { return "Calibrating" }
         if state.isChecking { return "Checking" }
         return nil
+    }
+}
+
+// Keep an operator-controlled escape hatch beside the image. Automatic
+// framing is a convenience, not the only way Ryan can correct a bad frame.
+private struct QuickFramingControlsView: View {
+    @Bindable var state: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Manual framing", systemImage: "move.3d")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Spacer()
+                Text("Small steps · Undo available")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 6) {
+                Button {
+                    Task { await state.nudgeComposition(dx: 0, dy: state.compositionStep) }
+                } label: {
+                    Label("Up", systemImage: "arrow.up")
+                }
+                .help("Move the camera image up")
+
+                Button {
+                    Task { await state.nudgeComposition(dx: -state.compositionStep, dy: 0) }
+                } label: {
+                    Label("Left", systemImage: "arrow.left")
+                }
+                .help("Move the camera image left")
+
+                Button {
+                    Task { await state.nudgeComposition(dx: state.compositionStep, dy: 0) }
+                } label: {
+                    Label("Right", systemImage: "arrow.right")
+                }
+                .help("Move the camera image right")
+
+                Button {
+                    Task { await state.nudgeComposition(dx: 0, dy: -state.compositionStep) }
+                } label: {
+                    Label("Down", systemImage: "arrow.down")
+                }
+                .help("Move the camera image down")
+
+                Divider()
+                    .frame(height: 18)
+
+                Button {
+                    Task { await state.nudgeZoom(delta: -20) }
+                } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                }
+                .help("Zoom out")
+
+                Button {
+                    Task { await state.nudgeZoom(delta: 20) }
+                } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+                .help("Zoom in")
+
+                Button {
+                    Task { await state.undoCompositionNudge() }
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .help("Undo the last pan or tilt adjustment")
+                .disabled(state.lastComposition == nil)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(state.currentDevice == nil)
+        }
     }
 }
 
