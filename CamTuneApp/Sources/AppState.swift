@@ -1040,19 +1040,47 @@ final class AppState {
 
     func applyFramingRecommendation(recheck: Bool = true) async {
         let previousScore = preCallQualityScore
-        let issue = (preCallQualityIssue ?? preCallReason ?? "").lowercased()
+        // A frame can be wrong in more than one dimension. The previous
+        // implementation fixed only the first warning (usually headroom),
+        // forcing a second click when the face was also too small. Build one
+        // composed adjustment from every current framing issue, then verify
+        // the resulting image once.
+        let issue = (preCallQualityIssues + [preCallQualityIssue ?? "", preCallReason ?? ""])
+            .joined(separator: " ")
+            .lowercased()
+        var horizontal = 0
+        var vertical = 0
+        var zoom = 0
+
         if issue.contains("too much headroom") {
-            await nudgeComposition(dx: 0, dy: compositionStep)
+            vertical += compositionStep
         } else if issue.contains("too little headroom") {
-            await nudgeComposition(dx: 0, dy: -compositionStep)
-        } else if issue.contains("too far right") {
-            await nudgeComposition(dx: -compositionStep, dy: 0)
+            vertical -= compositionStep
+        }
+        if issue.contains("too far right") {
+            horizontal -= compositionStep
         } else if issue.contains("too far left") {
-            await nudgeComposition(dx: compositionStep, dy: 0)
-        } else if issue.contains("face too small") {
-            await nudgeZoom(delta: 20)
+            horizontal += compositionStep
+        }
+        if issue.contains("face too small") {
+            zoom += 20
         } else if issue.contains("face too large") {
-            await nudgeZoom(delta: -20)
+            zoom -= 20
+        }
+
+        guard horizontal != 0 || vertical != 0 || zoom != 0 else {
+            statusMessage = "Framing already balanced"
+            try? await Task.sleep(for: .milliseconds(700))
+            statusMessage = nil
+            return
+        }
+
+        statusMessage = "Adjusting framing..."
+        if horizontal != 0 || vertical != 0 {
+            await nudgeComposition(dx: horizontal, dy: vertical)
+        }
+        if zoom != 0 {
+            await nudgeZoom(delta: zoom)
         }
         if recheck {
             await performCheck(reason: "framing fix", allowCached: false)

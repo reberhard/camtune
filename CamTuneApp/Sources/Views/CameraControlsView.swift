@@ -234,8 +234,9 @@ struct CameraControlsView: View {
                 Button {
                     Task { await state.applyFramingRecommendation() }
                 } label: {
-                    Label("Apply Fix", systemImage: "scope")
+                    Label("Frame Me", systemImage: "scope")
                 }
+                .help("Correct headroom, centering, and zoom together")
 
                 Button {
                     Task { await state.nudgeZoom(delta: -20) }
