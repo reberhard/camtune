@@ -57,7 +57,13 @@ struct SceneMetrics: Sendable {
             faceBox = nil
         }
         faceCenterX = (payload["face_center_x"] as? NSNumber)?.doubleValue
-        faceCenterY = (payload["face_center_y"] as? NSNumber)?.doubleValue
+        // ojo.py receives Vision's lower-left coordinates; the Swift preview
+        // uses upper-left coordinates. Keep one visual convention in the UI.
+        if let centerY = (payload["face_center_y"] as? NSNumber)?.doubleValue {
+            faceCenterY = 1 - centerY
+        } else {
+            faceCenterY = nil
+        }
         headroomPct = (payload["headroom_pct"] as? NSNumber)?.doubleValue
         faceHeightPct = (payload["face_height_pct"] as? NSNumber)?.doubleValue
         faceLumaMean = (payload["face_luma_mean"] as? NSNumber)?.doubleValue
@@ -146,7 +152,6 @@ final class AppState {
 
     // Lights state
     var lightFixtures: [LightFixture] = LightService.defaultFixtures
-    var linkKeyLights = true
 
     // Curtains state
     var curtainControlAvailable = false
@@ -385,13 +390,13 @@ final class AppState {
             return
         }
 
-        if let headroom = scene.headroomPct {
-            if headroom < 0.04 {
-                issues.append("too little headroom")
-            } else if headroom > 0.24 {
-                issues.append("too much headroom")
+        if let y = scene.faceCenterY {
+            if y < 0.42 {
+                issues.append("face too high")
+            } else if y > 0.58 {
+                issues.append("face too low")
             } else {
-                strengths.append("headroom looks balanced")
+                strengths.append("face is vertically centered")
             }
         }
 
@@ -759,7 +764,8 @@ final class AppState {
         let issue = (preCallQualityIssues + [preCallReason ?? ""])
             .joined(separator: " ")
             .lowercased()
-        if issue.contains("headroom")
+        if issue.contains("face too high")
+            || issue.contains("face too low")
             || issue.contains("too far")
             || issue.contains("face too small")
             || issue.contains("face too large") {
@@ -802,7 +808,6 @@ final class AppState {
         lastAutoCheck = now
         await checkNow(reason: appName)
         activeCallSession?.record(state: preCallState)
-        await autoFixFramingIfNeeded()
     }
 
     private static let iso8601 = ISO8601DateFormatter()
@@ -832,22 +837,6 @@ final class AppState {
         }
         _ = try? await ShellRunner.run(
             executablePath: "/usr/bin/python3", arguments: arguments, timeout: .seconds(10))
-    }
-
-    /// Phase 1 (2026-09-03): when the 90s auto-poll finds a framing Yellow,
-    /// apply the same fix "Apply Framing Fix" already runs manually, instead
-    /// of leaving Ryan to notice and click something. Bounded to once per
-    /// auto-poll cycle (every 90s at most) since applyFramingRecommendation
-    /// re-checks with reason "framing fix", which is not an auto-trigger
-    /// reason and will not re-enter this function.
-    private func autoFixFramingIfNeeded() async {
-        guard currentDevice != nil else { return } // UVC nudges need the Brio
-        guard preCallState?.lowercased() == "yellow" else { return }
-        let issue = (preCallReason ?? "").lowercased()
-        guard issue.contains("headroom") || issue.contains("too far")
-            || issue.contains("face too small") || issue.contains("face too large")
-        else { return }
-        await applyFramingRecommendation(recheck: true)
     }
 
     private func activeVideoCallAppName() -> String? {
@@ -1045,7 +1034,7 @@ final class AppState {
     func applyFramingRecommendation(recheck: Bool = true) async {
         let previousScore = preCallQualityScore
         // A frame can be wrong in more than one dimension. The previous
-        // implementation fixed only the first warning (usually headroom),
+        // implementation fixed only the first warning,
         // forcing a second click when the face was also too small. Build one
         // composed adjustment from every current framing issue, then verify
         // the resulting image once.
@@ -1056,9 +1045,9 @@ final class AppState {
         var vertical = 0
         var zoom = 0
 
-        if issue.contains("too much headroom") {
+        if issue.contains("face too low") {
             vertical += compositionStep
-        } else if issue.contains("too little headroom") {
+        } else if issue.contains("face too high") {
             vertical -= compositionStep
         }
         if issue.contains("too far right") {
@@ -1099,7 +1088,8 @@ final class AppState {
 
     private var hasFramingFix: Bool {
         let issue = (preCallQualityIssue ?? preCallReason ?? "").lowercased()
-        return issue.contains("headroom")
+        return issue.contains("face too high")
+            || issue.contains("face too low")
             || issue.contains("too far")
             || issue.contains("face too small")
             || issue.contains("face too large")
@@ -1146,9 +1136,9 @@ final class AppState {
         }
         statusMessage = "Adjusting background light..."
         do {
-            try await LightService.turnOff(target: "key")
-            try await LightService.setCustomHSV(hue: 28, saturation: 18, brightness: 38, target: "accent")
-            try await LightService.setCustomHSV(hue: 35, saturation: 5, brightness: 55, target: "background")
+            try await LightService.turnOff(target: "overheads")
+            try await LightService.setCustomHSV(hue: 28, saturation: 18, brightness: 38, target: "cafe")
+            try await LightService.setCustomHSV(hue: 35, saturation: 5, brightness: 55, target: "pie")
             lightingPlanSummary = "Background separation: key light down, warm practicals up."
             statusMessage = "Background light adjusted"
             if recheck {
@@ -1170,9 +1160,9 @@ final class AppState {
         }
         statusMessage = "Applying video lights..."
         do {
-            try await LightService.setCustomHSV(hue: 30, saturation: 6, brightness: 26, target: "key")
-            try await LightService.setCustomHSV(hue: 28, saturation: 18, brightness: 34, target: "accent")
-            try await LightService.setCustomHSV(hue: 35, saturation: 4, brightness: 50, target: "background")
+            try await LightService.setCustomHSV(hue: 30, saturation: 6, brightness: 26, target: "overheads")
+            try await LightService.setCustomHSV(hue: 28, saturation: 18, brightness: 34, target: "cafe")
+            try await LightService.setCustomHSV(hue: 35, saturation: 4, brightness: 50, target: "pie")
             lightingPlanSummary = "Balanced video baseline: soft warm key light, practical key, neutral fill."
             statusMessage = "Video lights ready"
         } catch {
@@ -1199,19 +1189,19 @@ final class AppState {
                 hue: plan.keyLight.hue,
                 saturation: plan.keyLight.saturation,
                 brightness: plan.keyLight.brightness,
-                target: "key"
+                target: "overheads"
             )
             try await LightService.setCustomHSV(
                 hue: plan.accent.hue,
                 saturation: plan.accent.saturation,
                 brightness: plan.accent.brightness,
-                target: "accent"
+                target: "cafe"
             )
             try await LightService.setCustomHSV(
                 hue: plan.background.hue,
                 saturation: plan.background.saturation,
                 brightness: plan.background.brightness,
-                target: "background"
+                target: "pie"
             )
             syncLightFixtureState(plan)
             lightingPlanSummary = plan.summary
@@ -1315,17 +1305,17 @@ final class AppState {
     private func syncLightFixtureState(_ plan: ProductionLightingPlan) {
         for index in lightFixtures.indices {
             switch lightFixtures[index].id {
-            case "key-left", "key-right":
+            case "overheads":
                 lightFixtures[index].hue = plan.keyLight.hue
                 lightFixtures[index].saturation = plan.keyLight.saturation
                 lightFixtures[index].brightness = plan.keyLight.brightness
                 lightFixtures[index].isOn = true
-            case "accent":
+            case "cafe":
                 lightFixtures[index].hue = plan.accent.hue
                 lightFixtures[index].saturation = plan.accent.saturation
                 lightFixtures[index].brightness = plan.accent.brightness
                 lightFixtures[index].isOn = true
-            case "background":
+            case "pie":
                 lightFixtures[index].hue = plan.background.hue
                 lightFixtures[index].saturation = plan.background.saturation
                 lightFixtures[index].brightness = plan.background.brightness
@@ -1401,16 +1391,23 @@ final class AppState {
         do {
             try await LightService.setCustomHSV(
                 hue: h, saturation: s, brightness: b, target: target)
-            // If key lights are linked and this is key-left, also apply to key-right
-            if linkKeyLights && fixture.id == "key-left",
-               let keyRightIdx = lightFixtures.firstIndex(where: { $0.id == "key-right" }) {
-                lightFixtures[keyRightIdx].hue = h
-                lightFixtures[keyRightIdx].saturation = s
-                lightFixtures[keyRightIdx].brightness = b
-                // key target already applies to both
-            }
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    func setFixtureEnabled(index: Int, enabled: Bool) async {
+        guard lightFixtures.indices.contains(index) else { return }
+        lightFixtures[index].isOn = enabled
+        if enabled {
+            await applyFixtureHSV(index: index)
+            return
+        }
+        do {
+            try await LightService.turnOff(target: lightFixtures[index].target)
+        } catch {
+            self.error = error.localizedDescription
+            lightFixtures[index].isOn = true
         }
     }
 

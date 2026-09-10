@@ -30,13 +30,14 @@ enum LightService {
     ]
 
     static let defaultFixtures: [LightFixture] = [
-        LightFixture(id: "key-left", name: "Key Left", ip: "", target: "key",
+        // These targets must remain the exact groups accepted by
+        // office-lights.py. The former key/accent/background aliases were UI
+        // inventions; the controller rejected them and the UI hid the error.
+        LightFixture(id: "overheads", name: "Overhead Lights", ip: "", target: "overheads",
                      hue: 30, saturation: 5, brightness: 30),
-        LightFixture(id: "key-right", name: "Key Right", ip: "", target: "key",
-                     hue: 30, saturation: 5, brightness: 30),
-        LightFixture(id: "accent", name: "Accent Light", ip: "", target: "accent",
+        LightFixture(id: "cafe", name: "Café Lamp", ip: "", target: "cafe",
                      hue: 25, saturation: 20, brightness: 25),
-        LightFixture(id: "background", name: "Background Light", ip: "", target: "background",
+        LightFixture(id: "pie", name: "Floor Lamp", ip: "", target: "pie",
                      hue: 35, saturation: 3, brightness: 45),
     ]
 

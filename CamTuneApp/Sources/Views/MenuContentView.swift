@@ -410,7 +410,8 @@ private struct PrimaryActionsView: View {
             .joined(separator: " ")
             .lowercased()
 
-        if issue.contains("headroom")
+        if issue.contains("face too high")
+            || issue.contains("face too low")
             || issue.contains("too far")
             || issue.contains("face too small")
             || issue.contains("face too large") {
@@ -578,7 +579,7 @@ private struct CompositionOverlayView: View {
                 guideLines(in: geometry.size)
                     .stroke(.white.opacity(0.22), style: StrokeStyle(lineWidth: 1, dash: [4, 5]))
 
-                headroomTarget(in: geometry.size)
+                faceCenterTarget(in: geometry.size)
                     .stroke(.green.opacity(0.52), lineWidth: 2)
 
                 if let box = scene?.faceBox {
@@ -612,15 +613,15 @@ private struct CompositionOverlayView: View {
         var path = Path()
         path.move(to: CGPoint(x: size.width / 2, y: 0))
         path.addLine(to: CGPoint(x: size.width / 2, y: size.height))
-        path.move(to: CGPoint(x: 0, y: size.height * 0.36))
-        path.addLine(to: CGPoint(x: size.width, y: size.height * 0.36))
+        path.move(to: CGPoint(x: 0, y: size.height * 0.5))
+        path.addLine(to: CGPoint(x: size.width, y: size.height * 0.5))
         return path
     }
 
-    private func headroomTarget(in size: CGSize) -> Path {
+    private func faceCenterTarget(in size: CGSize) -> Path {
         var path = Path()
-        let top = size.height * 0.12
-        let bottom = size.height * 0.24
+        let top = size.height * 0.42
+        let bottom = size.height * 0.58
         path.move(to: CGPoint(x: size.width * 0.20, y: top))
         path.addLine(to: CGPoint(x: size.width * 0.80, y: top))
         path.move(to: CGPoint(x: size.width * 0.20, y: bottom))
@@ -639,9 +640,9 @@ private struct CompositionOverlayView: View {
 
     private var hint: String? {
         guard let scene else { return nil }
-        if let headroom = scene.headroomPct {
-            if headroom > 0.38 { return "Pan image up" }
-            if headroom < 0.18 { return "Pan image down" }
+        if let y = scene.faceCenterY {
+            if y > 0.58 { return "Pan image up" }
+            if y < 0.42 { return "Pan image down" }
         }
         if let x = scene.faceCenterX {
             if x < 0.42 { return "Pan image right" }
@@ -660,7 +661,7 @@ private struct SceneQualityPillsView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            pill(label: "Headroom", value: headroomValue, good: headroomGood)
+            pill(label: "Vertical", value: verticalValue, good: verticalGood)
             pill(label: "Center", value: centerValue, good: centerGood)
             pill(label: "Zoom", value: zoomValue, good: zoomGood)
         }
@@ -690,14 +691,16 @@ private struct SceneQualityPillsView: View {
         return good ? .green : .yellow
     }
 
-    private var headroomValue: String {
-        guard let headroom = scene?.headroomPct else { return "--" }
-        return "\(Int((headroom * 100).rounded()))%"
+    private var verticalValue: String {
+        guard let y = scene?.faceCenterY else { return "--" }
+        let offset = Int(((y - 0.5) * 100).rounded())
+        if abs(offset) < 2 { return "ok" }
+        return offset < 0 ? "\(abs(offset))% high" : "\(offset)% low"
     }
 
-    private var headroomGood: Bool? {
-        guard let headroom = scene?.headroomPct else { return nil }
-        return (0.18...0.38).contains(headroom)
+    private var verticalGood: Bool? {
+        guard let y = scene?.faceCenterY else { return nil }
+        return (0.42...0.58).contains(y)
     }
 
     private var centerValue: String {

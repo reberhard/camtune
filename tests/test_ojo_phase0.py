@@ -9,6 +9,27 @@ ojo = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ojo)
 
 
+def test_ojo_light_fixture_targets_match_the_real_controller_groups():
+    source = "\n".join(
+        (ROOT / path).read_text()
+        for path in (
+            "CamTuneApp/Sources/Services/LightService.swift",
+            "CamTuneApp/Sources/AppState.swift",
+        )
+    )
+
+    for target in ("overheads", "cafe", "pie"):
+        assert f'target: "{target}"' in source
+    for invalid_target in ("key", "accent", "background"):
+        assert f'target: "{invalid_target}"' not in source
+
+
+def test_automatic_checks_do_not_actuate_framing():
+    source = (ROOT / "CamTuneApp/Sources/AppState.swift").read_text()
+
+    assert "autoFixFramingIfNeeded" not in source
+
+
 def base_scene(**overrides):
     scene = {
         "face_detected": True,
@@ -73,12 +94,12 @@ def test_framing_uses_estimated_crown_not_vision_face_top():
     assert result["framing_state"] == "green"
 
 
-def test_framing_still_flags_genuinely_excessive_headroom():
-    # A low face remains a framing problem after the crown correction.
+def test_framing_flags_a_face_below_frame_center():
+    # Vision's bottom-origin coordinates put this face visibly low in frame.
     result = ojo.framing_metrics([0.35, 0.05, 0.30, 0.30])
 
     assert result["headroom_pct"] == 0.485
-    assert "too much headroom" in result["framing_reason"]
+    assert "face too low" in result["framing_reason"]
 
 
 def test_classifier_red_when_lights_unreachable_and_scene_needs_light():

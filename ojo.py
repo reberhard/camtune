@@ -1289,10 +1289,13 @@ def framing_metrics(face_bbox):
         issues.append("face too small")
     elif h > 0.55:
         issues.append("face too large")
-    if headroom < 0.04:
-        issues.append("too little headroom")
-    elif headroom > 0.24:
-        issues.append("too much headroom")
+    # Vertical composition is about the face's visible position, not about
+    # empty space above it. `center_y` is Vision's bottom-origin coordinate:
+    # a smaller value means the face appears lower in the displayed frame.
+    if center_y < 0.42:
+        issues.append("face too low")
+    elif center_y > 0.58:
+        issues.append("face too high")
     return {
         "face_center_x": round(center_x, 3),
         "face_center_y": round(center_y, 3),

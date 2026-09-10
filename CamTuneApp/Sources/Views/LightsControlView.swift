@@ -87,72 +87,40 @@ struct LightsControlView: View {
 
                 Divider()
 
-                // Link key lights toggle
-                Toggle(isOn: $state.linkKeyLights) {
-                    Text("Link Key Lights")
-                        .font(.caption)
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-
                 // Per-fixture controls
                 ForEach(Array(state.lightFixtures.enumerated()), id: \.element.id) { index, fixture in
-                    // Skip the right key light controls when linked (it mirrors the left key light)
-                    if !(state.linkKeyLights && fixture.id == "key-right") {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(linkedLabel(for: fixture))
-                                    .font(.caption)
-                                    .fontWeight(.medium)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(fixture.name)
+                                .font(.caption)
+                                .fontWeight(.medium)
 
-                                Spacer()
+                            Spacer()
 
-                                Toggle("", isOn: fixtureOnBinding(index: index))
-                                    .toggleStyle(.switch)
-                                    .controlSize(.mini)
-                                    .labelsHidden()
-                            }
-
-                            if fixture.isOn {
-                                fixtureSliders(index: index)
-                            }
+                            Toggle("", isOn: fixtureOnBinding(index: index))
+                                .toggleStyle(.switch)
+                                .controlSize(.mini)
+                                .labelsHidden()
                         }
-                        .padding(.vertical, 2)
 
-                        if index < state.lightFixtures.count - 1 &&
-                           !(state.linkKeyLights && state.lightFixtures[safe: index + 1]?.id == "key-right") {
-                            Divider()
+                        if fixture.isOn {
+                            fixtureSliders(index: index)
                         }
+                    }
+                    .padding(.vertical, 2)
+
+                    if index < state.lightFixtures.count - 1 {
+                        Divider()
                     }
                 }
         }
-    }
-
-    private func linkedLabel(for fixture: LightFixture) -> String {
-        if state.linkKeyLights && fixture.id == "key-left" {
-            return "Key Lights"
-        }
-        return fixture.name
     }
 
     private func fixtureOnBinding(index: Int) -> Binding<Bool> {
         Binding(
             get: { state.lightFixtures[index].isOn },
             set: { newValue in
-                state.lightFixtures[index].isOn = newValue
-                let fixture = state.lightFixtures[index]
-                if newValue {
-                    Task { await state.applyFixtureHSV(index: index) }
-                } else {
-                    Task {
-                        try? await LightService.turnOff(target: fixture.target)
-                        if state.linkKeyLights && fixture.id == "key-left",
-                           let keyRightIdx = state.lightFixtures.firstIndex(where: { $0.id == "key-right" }) {
-                            state.lightFixtures[keyRightIdx].isOn = false
-                            try? await LightService.turnOff(target: "key")
-                        }
-                    }
-                }
+                Task { await state.setFixtureEnabled(index: index, enabled: newValue) }
             }
         )
     }
