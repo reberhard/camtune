@@ -66,6 +66,48 @@ private actor Calls {
     func add(_ action: String) { actions.append(action) }
 }
 
+@MainActor @Test func timeoutRemainsVisibleUntilSuccessfulRetry() async throws {
+    let room = RoomControlService()
+    room.transport = { _, _, _ in throw ShellError.timeout }
+    room.light("off", target: "overheads")
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(room.errors("overheads").count == 2)
+    #expect(room.summary("overheads").contains("Not confirmed"))
+    room.transport = { _, args, _ in response(args, on: false) }
+    room.light("off", target: "overheads")
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(room.errors("overheads").isEmpty)
+    #expect(room.summary("overheads") == "Off")
+}
+
+@MainActor @Test func staleRefreshCannotUndoCompletedNewerOff() async throws {
+    let room = RoomControlService()
+    room.transport = { _, args, _ in
+        let reading = args[0] == "status"
+        try await Task.sleep(for: reading ? .milliseconds(150) : .milliseconds(10))
+        return response(args, on: reading)
+    }
+    room.refresh()
+    try await Task.sleep(for: .milliseconds(20))
+    room.light("off", target: "overheads")
+    try await Task.sleep(for: .milliseconds(220))
+    #expect(room.summary("overheads") == "Off")
+}
+
+@MainActor @Test func repeatedSlidersCoalesce() async throws {
+    let room = RoomControlService()
+    let calls = Calls()
+    room.transport = { _, args, _ in
+        await calls.add(args.prefix(4).joined(separator: " "))
+        return response(args, on: true)
+    }
+    for brightness in 30...80 {
+        room.adjust(target: "overheads", hue: 30, saturation: 5, brightness: brightness)
+    }
+    try await Task.sleep(for: .milliseconds(450))
+    #expect(await calls.actions == ["adjust 30 5 80"])
+}
+
 @MainActor @Test func offCancelsDebouncedSlider() async throws {
     let room = RoomControlService()
     let calls = Calls()

@@ -134,7 +134,7 @@ final class AppState {
     var preCallLastChecked: Date?
     var preCallBlockingIssue: String?
     var isChecking = false
-    var autoCheckEnabled = true
+    var autoCheckEnabled = false
     var detectedCallApp: String?
     var lastAutoCheckReason: String?
     var isDeepRepairing = false

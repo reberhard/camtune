@@ -65,11 +65,12 @@ struct MenuContentView: View {
 
             HStack {
                 Toggle(isOn: $state.autoCheckEnabled) {
-                    Text("Auto-check")
+                    Text(AppState.sceneRepairEnabled ? "Auto-check" : "Auto-check unavailable")
                         .font(.system(size: 10))
                 }
                 .toggleStyle(.switch)
                 .controlSize(.mini)
+                .disabled(!AppState.sceneRepairEnabled)
 
                 Spacer()
 
