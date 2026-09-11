@@ -217,7 +217,7 @@ final class AppState {
         curtainControlAvailable = CurtainService.isAvailable()
         refreshDaemonStatus()
         savedProfileExists = ProfileService.exists()
-        startAutomaticChecks()
+        if Self.sceneRepairEnabled { startAutomaticChecks() }
         if curtainControlAvailable {
             Task { await refreshCurtainStatus() }
         }

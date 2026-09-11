@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuContentView: View {
     @Bindable var state: AppState
+    @State private var cameraExpanded = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,9 +30,12 @@ struct MenuContentView: View {
                         BasicCurtainsView(room: state.room)
                     }
 
-                    DisclosureGroup("Camera preview & manual controls") {
+                    DisclosureGroup("Camera preview & manual controls", isExpanded: $cameraExpanded) {
                         preview
                         FineTuneView(state: state)
+                    }
+                    .onChange(of: cameraExpanded) { _, expanded in
+                        if expanded { state.startPreview() } else { state.stopPreview() }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -84,7 +88,7 @@ struct MenuContentView: View {
             await state.startUp()
         }
         .onAppear {
-            state.startPreview()
+            state.room.refresh()
         }
         .onDisappear {
             if !state.isOptimizing
