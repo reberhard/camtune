@@ -15,6 +15,10 @@ enum ShellError: LocalizedError {
 }
 
 enum ShellRunner {
+    static func controller(executablePath: String, arguments: [String], timeout: Duration) async throws -> String {
+        try await runProcess(executableURL: URL(fileURLWithPath: executablePath),
+            arguments: arguments, input: nil, timeout: timeout, acceptedExitCodes: [0, 2])
+    }
     private static let defaultPath = [
         "/opt/homebrew/bin",
         "/usr/local/bin",
@@ -55,7 +59,8 @@ enum ShellRunner {
         executableURL: URL,
         arguments: [String],
         input: Data?,
-        timeout: Duration
+        timeout: Duration,
+        acceptedExitCodes: Set<Int32> = [0]
     ) async throws -> String {
         let process = Process()
         process.executableURL = executableURL
@@ -104,7 +109,7 @@ enum ShellRunner {
 
         let out = String(data: try await stdoutData, encoding: .utf8) ?? ""
         let err = String(data: try await stderrData, encoding: .utf8) ?? ""
-        if process.terminationStatus != 0 {
+        if !acceptedExitCodes.contains(process.terminationStatus) {
             throw ShellError.nonZeroExit(process.terminationStatus, stderr: err)
         }
         return out
