@@ -26,6 +26,10 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "CamTuneApp/Support"))
+from scene_contract import ProfileStore, room_readback, camera_validated
 from concurrent.futures import ThreadPoolExecutor
 
 __version__ = "2.1.0"
@@ -372,9 +376,16 @@ def is_video_call_active():
     is active, the camera event is from our own app, not a video call.
     """
     state = _read_state()
-    if state.get("preview_active"):
-        return False, None
-    return True, "external"
+    # Absence of Ojo preview never proves an external call. A fresh observed
+    # call control is required; process names/tabs are only hints.
+    evidence = state.get("call_activity", {})
+    observed = evidence.get("observed_at", 0)
+    if (evidence.get("state") == "active" and evidence.get("source") == "accessibility"
+            and evidence.get("leave_call_control") is True
+            and evidence.get("media_control") is True
+            and isinstance(observed, (int, float)) and 0 <= time.time() - observed <= 5):
+        return True, evidence.get("app")
+    return False, None
 
 
 def load_env_config():
@@ -568,20 +579,8 @@ def check_dependencies(require_claude=True):
     if not shutil.which("imagesnap"):
         missing.append(("imagesnap", "brew install imagesnap"))
 
-    # Check for uvcc — could be global or via npx
-    uvcc_ok = False
-    if shutil.which("uvcc"):
-        uvcc_ok = True
-    else:
-        try:
-            subprocess.run(
-                ["npx", "uvcc", "--version"],
-                capture_output=True, timeout=15,
-            )
-            uvcc_ok = True
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-    if not uvcc_ok:
+    # Dependency checks must never download or install a missing executable.
+    if not shutil.which("uvcc"):
         missing.append(("uvcc", "npm install -g uvcc"))
 
     if require_claude and not shutil.which("claude"):
@@ -597,9 +596,9 @@ def check_dependencies(require_claude=True):
 
 def uvcc(*args):
     """Run a uvcc command and return stdout."""
-    # Use npx to avoid requiring global install
-    cmd = ["npx", "uvcc"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    # Never let a control command download or install a package implicitly.
+    cmd = ["/opt/homebrew/bin/uvcc"] + list(args)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=True)
     return result.stdout.strip()
 
 
@@ -1474,102 +1473,17 @@ def detect_largest_bbox(face_bboxes):
 
 
 def classify_scene(scene):
-    """Classify local scene metrics into Green/Yellow/Red."""
-    checks = {
-        "camera": {"state": "green", "reason": "camera reachable"},
-        "face": {"state": "green", "reason": "one face detected"},
-        "framing": {"state": "green", "reason": "framing looks balanced"},
-        "exposure": {"state": "green", "reason": "face exposure within conservative range"},
-        "white_balance": {"state": "green", "reason": "rgb balance within conservative range"},
-        "background": {"state": "green", "reason": "background separation looks good"},
-        "profile": {"state": "green", "reason": "profile fresh or not required"},
-        "lights": {"state": "green", "reason": "required lights reachable or not configured"},
-    }
-
-    if not scene.get("face_detected"):
-        checks["face"] = {"state": "red", "reason": "no face detected"}
-    elif scene.get("face_count", 0) > 1:
-        checks["face"] = {"state": "red", "reason": "multiple faces detected"}
-
-    if scene.get("framing_state") == "red":
-        checks["framing"] = {"state": "red", "reason": scene.get("framing_reason", "framing blocked")}
-    elif scene.get("framing_state") == "yellow":
-        checks["framing"] = {"state": "yellow", "reason": scene.get("framing_reason", "framing needs adjustment")}
-
-    p95 = scene.get("face_luma_p95", 0)
-    p05 = scene.get("face_luma_p05", 0)
-    mean = scene.get("face_luma_mean", 0)
-    tonal_range = scene.get("face_tonal_range", 0)
-    separation = scene.get("background_separation", 0)
-    highlight_clip = scene.get("highlight_clip_pct", 0)
-    shadow_clip = scene.get("shadow_clip_pct", 0)
-    face_reads_white = (
-        mean >= FACE_WHITE_LUMA_WARN
-        and (
-            p95 >= FACE_WHITE_P95_WARN
-            or tonal_range < FACE_WHITE_TONAL_RANGE_WARN
-            or separation > FACE_WHITE_SEPARATION_WARN
-        )
-    )
-    if highlight_clip >= 3 or shadow_clip >= 15 or p95 >= 252 or p05 <= 3:
-        checks["exposure"] = {"state": "red", "reason": "severe clipping in face region"}
-    elif mean < 70 or shadow_clip >= 5:
-        checks["exposure"] = {"state": "yellow", "reason": "mild dark/shadow exposure issue"}
-    elif face_reads_white:
-        checks["exposure"] = {"state": "yellow", "reason": "face reads too white or flat for the saved preference"}
-    elif mean > 185 or highlight_clip >= 0.5:
-        checks["exposure"] = {"state": "yellow", "reason": "mild bright/highlight exposure issue"}
-
-    rgb_balance = scene.get("rgb_balance") or [1.0, 1.0, 1.0]
-    max_channel_drift = max(abs(v - 1.0) for v in rgb_balance)
-    if max_channel_drift >= 0.35:
-        checks["white_balance"] = {"state": "red", "reason": "severe color imbalance"}
-    elif max_channel_drift >= 0.18:
-        checks["white_balance"] = {"state": "yellow", "reason": "mild white-balance issue"}
-
-    if separation < -20:
-        checks["background"] = {"state": "yellow", "reason": "background is brighter than face"}
-    elif separation < 10:
-        checks["background"] = {"state": "yellow", "reason": "weak face/background separation"}
-    elif separation > 65:
-        checks["background"] = {"state": "yellow", "reason": "background too dark relative to face"}
-
-    profile_age = scene.get("profile_age_minutes")
-    if profile_age is None:
-        checks["profile"] = {"state": "yellow", "reason": "no recent accepted tune profile"}
-    elif profile_age > 8 * 60:
-        checks["profile"] = {"state": "yellow", "reason": f"profile stale ({profile_age}m old)"}
-
-    if not scene.get("lights_reachable", True):
-        if scene_needs_light_help(checks):
-            checks["lights"] = {
-                "state": "red",
-                "reason": "lights unreachable and scene needs lighting help",
-            }
-        else:
-            checks["lights"] = {
-                "state": "yellow",
-                "reason": "lights unreachable but scene metrics are acceptable",
-            }
-    elif scene.get("lights_degraded", False):
-        checks["lights"] = {"state": "yellow", "reason": "one or more lights degraded"}
-
-    if any(check["state"] == "red" for check in checks.values()):
-        state = "red"
-    elif any(check["state"] == "yellow" for check in checks.values()):
-        state = "yellow"
-    else:
-        state = "green"
-
-    reasons = [check["reason"] for check in checks.values() if check["state"] == state]
-    quality = score_look(scene)
-    return {
-        "state": state,
-        "reason": reasons[0] if reasons else "all checks passed",
-        "checks": checks,
-        "quality": quality,
-        "scene": scene,
-    }
+    """All callers use the same Stage 2 executable contract as Swift."""
+    from pathlib import Path
+    support = str(Path(__file__).resolve().parent / "CamTuneApp/Support")
+    if support not in sys.path:
+        sys.path.insert(0, support)
+    from scene_contract import assess
+    payload = dict(scene)
+    if "face_box" not in payload and payload.get("face_bbox"):
+        x, y, w, h = payload["face_bbox"]
+        payload["face_box"] = [x, 1 - y - h, w, h]
+    return assess(payload)
 
 
 def run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
@@ -1577,13 +1491,17 @@ def run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
     env_config = load_env_config()
     if getattr(args, "skip_lights", False):
         light_status = {}
+        actuator_evidence = {"actuator_status": "unknown"}
     else:
-        light_status = probe_env_reachability(env_config, timeout=getattr(args, "light_timeout", 8.0))
+        actuator_evidence = room_readback()
+        light_status = {}
     capture_path = getattr(args, "capture_path", CAPTURE_PATH)
     warmup_secs = getattr(args, "warmup_seconds", 1)
 
     if not capture_frame(camera_name, capture_path, source="camera", warmup_secs=warmup_secs):
         raise RuntimeError("unable to capture raw camera frame")
+
+    captured_at = time.time()
 
     face_bboxes = detect_face_bboxes(capture_path)
     scene = describe_scene(
@@ -1592,6 +1510,22 @@ def run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
         light_status=light_status,
         profile_path=profile_path,
     )
+    scene["measured_at"] = captured_at
+    scene["camera_id"] = getattr(args, "camera_identity", None)
+    scene["camera_validated"] = camera_validated(scene["camera_id"])
+    scene["trigger"] = getattr(args, "trigger", "manual")
+    # Reachability probes are not actuator readback; never promote skipped or
+    # legacy plain-text probes to confirmed physical state.
+    scene.update(actuator_evidence)
+    from pathlib import Path
+    support = str(Path(__file__).resolve().parent / "CamTuneApp/Support")
+    if support not in sys.path:
+        sys.path.insert(0, support)
+    from scene_contract import ProfileStore
+    try:
+        scene["profile_status"] = ProfileStore().select(scene)["status"]
+    except (ValueError, OSError):
+        scene["profile_status"] = "unknown"
     result = classify_scene(scene)
     result["profile_status"] = select_profile_status(scene)
     result["elapsed_ms"] = int((time.time() - start) * 1000)
@@ -1628,6 +1562,8 @@ def run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
 def cmd_check(args, camera_name):
     cached = load_recent_check_cache(getattr(args, "max_age_seconds", 0))
     if cached:
+        # Reassess stored evidence at the current time, never replay cached Green.
+        cached = dict(classify_scene(cached.get("scene",{})),cached=True)
         if args.json:
             print(json.dumps(cached, sort_keys=True))
         else:
@@ -1709,16 +1645,38 @@ def cmd_log_call(args):
         final_state=args.final_state,
         rescue_count=args.rescue_count,
     )
+    row["assessment_contract"] = "scene_contract.v2"
+    row["boundary_source"] = getattr(args,"boundary_source","operator")
+    row["coverage"] = "interrupted_observation" if getattr(args,"observation_interrupted",False) else "observed_segment"
     if args.dry_run:
         print(json.dumps(row, sort_keys=True))
         return row
-    _append_jsonl(CALLS_PATH, row)
+    append_call_once(row, CALLS_PATH)
     if args.json:
         print(json.dumps(row, sort_keys=True))
     else:
         print(f"Logged call rollup: {args.app} ({row['duration_seconds']}s, "
               f"green={args.reached_green}, rescues={args.rescue_count})")
     return row
+
+
+def append_call_once(row, path):
+    """Retry-safe append: an acknowledged or lost-ack session is never doubled."""
+    import fcntl
+    os.makedirs(os.path.dirname(path),exist_ok=True)
+    with open(path,"a+") as handle:
+        fcntl.flock(handle,fcntl.LOCK_EX)
+        handle.seek(0)
+        for line in handle:
+            try:
+                if json.loads(line).get("call_session_id") == row["call_session_id"]:
+                    return False
+            except ValueError:
+                raise ValueError("Corrupt call log; preserve and repair before appending")
+        handle.write(json.dumps(row,sort_keys=True)+"\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return True
 
 
 def cmd_feedback(args):
@@ -1741,44 +1699,25 @@ def cmd_feedback(args):
 
 
 def cmd_profiles(args):
-    profile_map = load_profile_map(args.profile_map)
-    status = select_profile_status({}, profile_map)
-    output = {
-        "schema_version": profile_map.get("schema_version", 1),
-        "profile_count": len(profile_map.get("profiles", {})),
-        "current": status,
-    }
+    store = ProfileStore()
+    data = store.read()
+    output = {"schema_version": 2, "profile_count": len(data["profiles"]),
+              "profiles": data["profiles"], "legacy_candidates": store.migrate_legacy()}
     if args.json:
         print(json.dumps(output, sort_keys=True))
     else:
-        available = "available" if status["profile_available"] else "missing"
-        print(f"{status['bucket']}: {available} ({output['profile_count']} profiles)")
+        print(f'{output["profile_count"]} accepted profiles; legacy files require fresh acceptance')
     return output
 
 
 def cmd_save_profile(args, camera_name, vendor, product):
-    """Save the current UVC settings + current scene into the current
-    time-bucket's profile-map entry. Phase 2 (2026-09-03): the only prior
-    way to populate lighting-profiles.json was through `calibrate`'s
-    accept path, which is gated on AI repair actually being needed — a
-    scene that already looks fine (the common case when someone just wants
-    to bank "this is what good looks like right now for this time of day")
-    would skip AI Tune and never write a profile entry at all. This command
-    saves whatever the camera is set to right now, no AI Tune required.
-    """
-    result = run_pre_call_check(args, camera_name, profile_path=args.profile)
+    # Read settings before the fresh frame; saves must not age a frame during IO.
     settings = get_current_settings(vendor, product)
-    profile = update_profile_map(settings, result["scene"], profile_map_path=args.profile_map)
-    output = {
-        "bucket": profile["time_bucket"],
-        "state": result["state"],
-        "reason": result["reason"],
-        "look_score": profile["quality"]["look_score"],
-    }
-    if args.json:
-        print(json.dumps(output, sort_keys=True))
-    else:
-        print(f"Saved profile for {output['bucket']} (look score {output['look_score']}).")
+    result = run_pre_call_check(args, camera_name, profile_path=args.profile)
+    profile = ProfileStore().save(result["scene"], settings)
+    output = {"bucket": profile["bucket"], "state": result["state"],
+              "reason": "Accepted profile saved", "schema_version": 2}
+    print(json.dumps(output, sort_keys=True) if args.json else output["reason"])
     return output
 
 
@@ -2486,6 +2425,8 @@ def main():
     log_parser.add_argument("--worst-state", default=None)
     log_parser.add_argument("--final-state", default=None)
     log_parser.add_argument("--rescue-count", type=int, default=0)
+    log_parser.add_argument("--boundary-source", default="operator", choices=["operator","verified-call-observation"])
+    log_parser.add_argument("--observation-interrupted", action="store_true")
     log_parser.add_argument("--json", action="store_true")
     log_parser.add_argument(
         "--dry-run", action="store_true",
@@ -2572,10 +2513,10 @@ def main():
 
     # Stage 1 contains unfinished writers. Read-only checks and profile records
     # remain available; AI/hold loops cannot overwrite explicit room controls.
-    if args.command in (None, "calibrate", "optimize") or (
+    if args.command in (None, "calibrate", "optimize", "restore") or (
         args.command == "daemon" and args.daemon_command in ("run", "install")
     ):
-        parser.error("Automatic repair is unavailable during the Stage 1 control repair")
+        parser.error("Legacy repair/restore is unavailable; Stage 2 requires verified scene preparation")
 
     if args.command == "feedback":
         cmd_feedback(args)
@@ -2606,6 +2547,7 @@ def main():
     check_dependencies(require_claude=args.command not in ("check", "calibrate", "profiles"))
 
     camera_name, vendor, product = detect_camera(preferred=args.camera)
+    args.camera_identity = f"camera:{vendor}:{product}" if vendor and product else None
 
     if args.command == "check":
         cmd_check(args, camera_name)

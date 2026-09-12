@@ -44,6 +44,10 @@ final class CameraPreviewNSView: NSView {
         // aspect-filled preview silently crops edges, which can make it
         // disagree with the frame a video-call app receives.
         layer.videoGravity = .resizeAspect
+        if let connection = layer.connection, connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = false
+        }
         layer.frame = bounds
         self.layer?.addSublayer(layer)
         previewLayer = layer

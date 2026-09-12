@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import time
 from pathlib import Path
 
 
@@ -32,6 +33,12 @@ def test_automatic_checks_do_not_actuate_framing():
 
 def base_scene(**overrides):
     scene = {
+        "camera_id": "fixture-camera",
+        "camera_validated": True,
+        "measured_at": time.time(),
+        "profile_status": "compatible",
+        "actuator_status": "confirmed",
+        "actuators_at": time.time(),
         "face_detected": True,
         "face_count": 1,
         "face_bbox": [0.25, 0.25, 0.5, 0.5],
@@ -53,6 +60,14 @@ def base_scene(**overrides):
         "light_status": {},
     }
     scene.update(overrides)
+    # Stage 2 fixtures supply the actual evidence; legacy warning strings and
+    # raw profile timestamps no longer stand in for measured acceptance.
+    if scene["profile_age_minutes"] > 8 * 60:
+        scene["profile_status"] = "stale"
+    if not scene["lights_reachable"]:
+        scene["actuator_status"] = "failed"
+    if "background_separation" in overrides:
+        scene["background_luma_mean"] = scene["face_luma_mean"] - overrides["background_separation"]
     return scene
 
 
@@ -77,11 +92,11 @@ def test_classifier_yellow_for_stale_profile():
     assert result["checks"]["profile"]["state"] == "yellow"
 
 
-def test_classifier_yellow_when_lights_unreachable_but_scene_ok():
+def test_classifier_failed_actuator_is_not_hidden_by_good_image():
     result = ojo.classify_scene(base_scene(lights_reachable=False))
 
-    assert result["state"] == "yellow"
-    assert result["checks"]["lights"]["reason"] == "lights unreachable but scene metrics are acceptable"
+    assert result["state"] == "red"
+    assert result["checks"]["lights"]["reason"] == "required actuator state failed"
 
 
 def test_framing_uses_estimated_crown_not_vision_face_top():
@@ -110,7 +125,7 @@ def test_classifier_red_when_lights_unreachable_and_scene_needs_light():
     ))
 
     assert result["state"] == "red"
-    assert result["checks"]["lights"]["reason"] == "lights unreachable and scene needs lighting help"
+    assert result["checks"]["lights"]["reason"] == "required actuator state failed"
 
 
 def test_profile_map_selects_current_bucket(monkeypatch, tmp_path):
@@ -141,7 +156,7 @@ def test_background_separation_affects_status():
     result = ojo.classify_scene(base_scene(background_separation=2))
 
     assert result["state"] == "yellow"
-    assert result["checks"]["background"]["reason"] == "weak face/background separation"
+    assert result["checks"]["background"]["reason"] == "face/background separation needs adjustment"
 
 
 def test_classifier_flags_pale_flat_face_before_clipping():
@@ -194,6 +209,7 @@ def test_ai_repair_skips_framing_only_issue():
     result = ojo.classify_scene(base_scene(
         framing_state="yellow",
         framing_reason="too much headroom",
+        face_bbox=[0.25, 0.0, 0.5, 0.5],
     ))
 
     assert ojo.ai_repair_needed(result) is False
@@ -204,6 +220,7 @@ def test_ai_repair_runs_for_severe_exposure_failure():
     result = ojo.classify_scene(base_scene(
         highlight_clip_pct=18,
         face_luma_mean=245,
+        face_luma_p95=254,
     ))
 
     assert result["checks"]["exposure"]["state"] == "red"

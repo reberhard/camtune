@@ -3,9 +3,11 @@ import Foundation
 struct UVCRange: Sendable {
     let min: Int
     let max: Int
+    var step: Int = 1
 
     func clamp(_ value: Int) -> Int {
-        Swift.min(Swift.max(value, min), max)
+        let bounded = Swift.min(Swift.max(value, min), max)
+        return min + ((bounded - min) / Swift.max(1, step)) * Swift.max(1, step)
     }
 }
 

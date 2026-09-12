@@ -24,8 +24,8 @@ final class CameraCaptureService {
         let devices = discovery.devices
 
         if let name {
-            return devices.first { $0.localizedName.localizedCaseInsensitiveContains(name) }
-                ?? devices.first
+            let matches = devices.filter { $0.localizedName.localizedCaseInsensitiveContains(name) }
+            return matches.count == 1 ? matches[0] : nil
         }
         // Prefer external cameras over built-in
         return devices.first { $0.deviceType == .external } ?? devices.first
@@ -53,6 +53,7 @@ final class CameraCaptureService {
         newSession.addOutput(output)
 
         let frameOutput = AVCaptureVideoDataOutput()
+        frameOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         frameOutput.alwaysDiscardsLateVideoFrames = true
         let delegate = VideoFrameDelegate { [weak self] scene in
             Task { @MainActor in
@@ -65,6 +66,10 @@ final class CameraCaptureService {
                 queue: DispatchQueue(label: "ojo.preview.vision")
             )
             newSession.addOutput(frameOutput)
+            if let connection = frameOutput.connection(with: .video), connection.isVideoMirroringSupported {
+                connection.automaticallyAdjustsVideoMirroring = false
+                connection.isVideoMirrored = false
+            }
             self.videoOutput = frameOutput
             self.videoDelegate = delegate
         }
@@ -95,6 +100,7 @@ final class CameraCaptureService {
         // Wait for exposure/WB to settle
         await waitForAutoAdjustments(device: device)
 
+        defer { _retainedDelegate = nil }
         let rawData: Data = try await withCheckedThrowingContinuation { continuation in
             let delegate = PhotoDelegate(continuation: continuation)
             let settings = AVCapturePhotoSettings()
@@ -105,8 +111,10 @@ final class CameraCaptureService {
             output.capturePhoto(with: settings, delegate: delegate)
             // Keep delegate alive until callback
             _retainedDelegate = delegate
+            DispatchQueue.global().asyncAfter(deadline: .now() + 8) {
+                delegate.finish(.failure(CaptureError.captureFailed("Timed out waiting for a camera frame")))
+            }
         }
-        _retainedDelegate = nil
 
         return try transcodeJPEG(rawData, maxWidth: maxWidth, quality: quality)
     }
@@ -186,11 +194,20 @@ final class CameraCaptureService {
 }
 
 /// Delegate that bridges AVCapturePhotoCaptureDelegate to async/await.
-private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Sendable {
-    private let continuation: CheckedContinuation<Data, Error>
+final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Sendable {
+    private var continuation: CheckedContinuation<Data, Error>?
+    private let lock = NSLock()
 
     init(continuation: CheckedContinuation<Data, Error>) {
         self.continuation = continuation
+    }
+
+    func finish(_ result: Result<Data, Error>) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(with: result)
     }
 
     func photoOutput(
@@ -199,16 +216,16 @@ private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate, @unc
         error: Error?
     ) {
         if let error {
-            continuation.resume(throwing: CameraCaptureService.CaptureError.captureFailed(
-                error.localizedDescription))
+            finish(.failure(CameraCaptureService.CaptureError.captureFailed(
+                error.localizedDescription)))
             return
         }
         guard let data = photo.fileDataRepresentation() else {
-            continuation.resume(throwing: CameraCaptureService.CaptureError.captureFailed(
-                "No data in photo"))
+            finish(.failure(CameraCaptureService.CaptureError.captureFailed(
+                "No data in photo")))
             return
         }
-        continuation.resume(returning: data)
+        finish(.success(data))
     }
 }
 
@@ -216,83 +233,65 @@ private final class VideoFrameDelegate: NSObject, AVCaptureVideoDataOutputSample
     private let handler: @Sendable (SceneMetrics) -> Void
     private var lastProcessed = Date.distantPast
 
-    init(handler: @escaping @Sendable (SceneMetrics) -> Void) {
-        self.handler = handler
-    }
+    init(handler: @escaping @Sendable (SceneMetrics) -> Void) { self.handler = handler }
 
-    func captureOutput(
-        _ output: AVCaptureOutput,
-        didOutput sampleBuffer: CMSampleBuffer,
-        from connection: AVCaptureConnection
-    ) {
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
         let now = Date()
         guard now.timeIntervalSince(lastProcessed) > 0.5 else { return }
         lastProcessed = now
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-
-        let request = VNDetectFaceRectanglesRequest { [handler, weak self] request, _ in
-            guard let face = request.results?.compactMap({ $0 as? VNFaceObservation }).first else {
-                return
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            handler(SceneMetrics(faceBox: nil, faceCount: nil, measuredAt: now)); return
+        }
+        let request = VNDetectFaceRectanglesRequest()
+        do {
+            try VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up).perform([request])
+            let faces = request.results ?? []
+            guard faces.count == 1, let face = faces.first else {
+                handler(SceneMetrics(faceBox: nil, faceCount: faces.count, measuredAt: now)); return
             }
             let box = face.boundingBox
-            let topLeftBox = CGRect(
-                x: box.minX,
-                y: 1 - box.minY - box.height,
-                width: box.width,
-                height: box.height
-            )
-            let luma = self?.lumaMetrics(pixelBuffer: pixelBuffer, faceBox: topLeftBox)
-            handler(SceneMetrics(
-                faceBox: topLeftBox,
-                faceLumaMean: luma?.face,
-                backgroundLumaMean: luma?.background
-            ))
+            let rect = CGRect(x: box.minX, y: 1 - box.maxY, width: box.width, height: box.height)
+            var scene = SceneMetrics(faceBox: rect, faceCount: 1, measuredAt: now)
+            scene.photometry = Self.photometry(pixelBuffer, faceBox: rect)
+            handler(scene)
+        } catch {
+            handler(SceneMetrics(faceBox: nil, faceCount: nil, measuredAt: now))
         }
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
-        try? handler.perform([request])
     }
 
-    private func lumaMetrics(pixelBuffer: CVPixelBuffer, faceBox: CGRect) -> (face: Double?, background: Double?) {
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-
-        guard CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-              let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0)
-        else { return (nil, nil) }
-
-        let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
-        let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
-        let rowStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+    static func photometry(_ buffer: CVPixelBuffer, faceBox: CGRect) -> [String: Double] {
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA,
+              let base = CVPixelBufferGetBaseAddress(buffer) else { return [:] }
+        let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
+        let strideBytes = CVPixelBufferGetBytesPerRow(buffer)
         let bytes = base.assumingMemoryBound(to: UInt8.self)
-        let faceRect = CGRect(
-            x: faceBox.minX * Double(width),
-            y: faceBox.minY * Double(height),
-            width: faceBox.width * Double(width),
-            height: faceBox.height * Double(height)
-        )
-
-        var faceSum = 0.0
-        var faceCount = 0
-        var bgSum = 0.0
-        var bgCount = 0
-        let step = 8
-
-        for y in stride(from: 0, to: height, by: step) {
-            for x in stride(from: 0, to: width, by: step) {
-                let value = Double(bytes[y * rowStride + x])
-                if faceRect.contains(CGPoint(x: x, y: y)) {
-                    faceSum += value
-                    faceCount += 1
-                } else {
-                    bgSum += value
-                    bgCount += 1
-                }
+        var face: [Double] = [], bg: [Double] = []
+        var red = 0.0, green = 0.0, blue = 0.0
+        for y in stride(from: 0, to: height, by: 8) {
+            for x in stride(from: 0, to: width, by: 8) {
+                let offset = y * strideBytes + x * 4
+                let b = Double(bytes[offset]), g = Double(bytes[offset + 1]), r = Double(bytes[offset + 2])
+                let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                if faceBox.contains(CGPoint(x: Double(x) / Double(width), y: Double(y) / Double(height))) {
+                    face.append(luma); red += r; green += g; blue += b
+                } else { bg.append(luma) }
             }
         }
-
-        return (
-            faceCount > 0 ? faceSum / Double(faceCount) : nil,
-            bgCount > 0 ? bgSum / Double(bgCount) : nil
-        )
+        guard !face.isEmpty, !bg.isEmpty else { return [:] }
+        face.sort()
+        let n = Double(face.count), avg = (red + green + blue) / 3
+        var result = [
+            "face_luma_mean": face.reduce(0, +) / n,
+            "face_luma_p05": face[Int(Double(face.count - 1) * 0.05)],
+            "face_luma_p95": face[Int(Double(face.count - 1) * 0.95)],
+            "background_luma_mean": bg.reduce(0, +) / Double(bg.count),
+            "highlight_clip_pct": Double(face.filter { $0 >= 245 }.count) / n * 100,
+            "shadow_clip_pct": Double(face.filter { $0 <= 10 }.count) / n * 100,
+        ]
+        if avg > 0 { result["red_balance"] = red / avg; result["green_balance"] = green / avg; result["blue_balance"] = blue / avg }
+        return result
     }
 }
