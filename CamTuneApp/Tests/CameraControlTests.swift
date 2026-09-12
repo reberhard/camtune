@@ -86,3 +86,48 @@ private actor CameraCalls {
     #expect(scene.photometry["red_balance"] == 1)
     #expect(scene.cameraID == "fixture")
 }
+
+@Test func callRollupQueueSurvivesFailureAndDrainsOnRetry() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at:root) }
+    let id = UUID()
+    try CallRollupService.enqueue(id:id,arguments:["calls","log","--call-session-id",id.uuidString],root:root)
+    let failed = await CallRollupService.flush(root:root) { _ in throw ShellError.timeout }
+    #expect(failed.count == 1)
+    #expect(FileManager.default.fileExists(atPath:root.appendingPathComponent(id.uuidString+".json").path))
+    let retried = await CallRollupService.flush(root:root) { args in
+        #expect(args.prefix(2) == ["calls","log"])
+    }
+    #expect(retried.isEmpty)
+    #expect(try FileManager.default.contentsOfDirectory(atPath:root.path).isEmpty)
+}
+
+@MainActor @Test func sceneButtonsRefuseUnvalidatedOfficeWithoutHardware() async {
+    let state = AppState()
+    state.currentDevice = testCamera
+    state.stage2ValidationURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    await state.meetingReadyNow()
+    #expect(state.error?.contains("office") == true)
+    #expect(!state.isMeetingReadyRunning)
+    await state.deepRepairNow()
+    #expect(state.activePreparationID == nil)
+    await state.applyFramingRecommendation()
+    #expect(state.error?.contains("office") == true)
+}
+
+@MainActor @Test func staleReadinessNeverDisplaysReady() {
+    let state = AppState()
+    state.preCallState = "green"
+    state.preCallLastChecked = Date(timeIntervalSinceNow:-3)
+    #expect(state.readinessSummary.contains("not verified"))
+}
+
+@Test func photoTimeoutAndLateCallbackResumeOnlyOnce() async throws {
+    let result: Data = try await withCheckedThrowingContinuation { continuation in
+        let delegate = PhotoDelegate(continuation: continuation)
+        delegate.finish(.success(Data([1])))
+        delegate.finish(.failure(ShellError.timeout))
+        delegate.finish(.success(Data([2])))
+    }
+    #expect(result == Data([1]))
+}

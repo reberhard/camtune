@@ -36,8 +36,9 @@ def assess(scene, now=None):
         checks[key] = {"state": state, "reason": reason}
 
     camera = scene.get("camera_id")
-    put("camera", "green" if camera and fresh(scene.get("measured_at"), now) else "unknown",
-        "fresh identified camera frame" if camera and fresh(scene.get("measured_at"), now) else "camera identity or fresh frame missing")
+    camera_ok = camera and fresh(scene.get("measured_at"), now) and scene.get("camera_validated") is True
+    put("camera", "green" if camera_ok else "unknown",
+        "fresh validated camera frame" if camera_ok else "camera identity, office validation or fresh frame missing")
     count = scene.get("face_count")
     if type(count) is not int or count < 0:
         count = None
@@ -203,17 +204,17 @@ def call_activity(evidence, now=None):
     now = time.time() if now is None else now
     if not fresh(evidence.get("observed_at"), now, 5):
         return {"state": "unknown", "reason": "call evidence missing or stale"}
-    if evidence.get("source") == "accessibility" and evidence.get("leave_call_control") is True and evidence.get("app"):
+    if evidence.get("source") == "accessibility" and evidence.get("leave_call_control") is True and evidence.get("media_control") is True and evidence.get("app"):
         return {"state": "active", "app": evidence["app"], "reason": "live leave-call control observed"}
     return {"state": "unknown", "reason": "app or tab presence does not establish call activity"}
 
 
-def room_readback(runner=None):
+def room_readback(runner=None, timeout=19):
     """Read-only receipt adapter shared by CLI checks; skipped reads stay Unknown."""
     import subprocess
     from concurrent.futures import ThreadPoolExecutor
     if runner is None:
-        runner = lambda args: subprocess.run(args, capture_output=True, text=True, timeout=19, check=False)
+        runner = lambda args: subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
     root = Path.home() / "gg/scripts"
     commands = [["/opt/homebrew/bin/python3", str(root / "office-lights.py"), "status", "all", "--json"],
                 ["/opt/homebrew/bin/python3", str(root / "office-blinds.py"), "status", "both", "--json"]]
@@ -238,6 +239,16 @@ def room_readback(runner=None):
         return {"actuator_status":"confirmed", "actuators_at":min(r["observed_at"] for r in rows)}
     except (ValueError, KeyError, TypeError, OSError, subprocess.TimeoutExpired):
         return {"actuator_status":"unknown"}
+
+
+def camera_validated(camera_id, path=None):
+    path=Path(path) if path else Path.home()/".config/camtune/stage2-office-validation.json"
+    try:
+        receipt=json.loads(path.read_text())
+        return bool(camera_id and receipt.get("camera_id")==camera_id and receipt.get("call_preview_parity") is True
+                    and receipt.get("stage1_accepted") is True and receipt.get("validation_receipt"))
+    except (ValueError,OSError,AttributeError):
+        return False
 
 
 def main():

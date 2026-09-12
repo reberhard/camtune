@@ -100,6 +100,7 @@ final class CameraCaptureService {
         // Wait for exposure/WB to settle
         await waitForAutoAdjustments(device: device)
 
+        defer { _retainedDelegate = nil }
         let rawData: Data = try await withCheckedThrowingContinuation { continuation in
             let delegate = PhotoDelegate(continuation: continuation)
             let settings = AVCapturePhotoSettings()
@@ -110,8 +111,10 @@ final class CameraCaptureService {
             output.capturePhoto(with: settings, delegate: delegate)
             // Keep delegate alive until callback
             _retainedDelegate = delegate
+            DispatchQueue.global().asyncAfter(deadline: .now() + 8) {
+                delegate.finish(.failure(CaptureError.captureFailed("Timed out waiting for a camera frame")))
+            }
         }
-        _retainedDelegate = nil
 
         return try transcodeJPEG(rawData, maxWidth: maxWidth, quality: quality)
     }
@@ -191,11 +194,20 @@ final class CameraCaptureService {
 }
 
 /// Delegate that bridges AVCapturePhotoCaptureDelegate to async/await.
-private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Sendable {
-    private let continuation: CheckedContinuation<Data, Error>
+final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Sendable {
+    private var continuation: CheckedContinuation<Data, Error>?
+    private let lock = NSLock()
 
     init(continuation: CheckedContinuation<Data, Error>) {
         self.continuation = continuation
+    }
+
+    func finish(_ result: Result<Data, Error>) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(with: result)
     }
 
     func photoOutput(
@@ -204,16 +216,16 @@ private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate, @unc
         error: Error?
     ) {
         if let error {
-            continuation.resume(throwing: CameraCaptureService.CaptureError.captureFailed(
-                error.localizedDescription))
+            finish(.failure(CameraCaptureService.CaptureError.captureFailed(
+                error.localizedDescription)))
             return
         }
         guard let data = photo.fileDataRepresentation() else {
-            continuation.resume(throwing: CameraCaptureService.CaptureError.captureFailed(
-                "No data in photo"))
+            finish(.failure(CameraCaptureService.CaptureError.captureFailed(
+                "No data in photo")))
             return
         }
-        continuation.resume(returning: data)
+        finish(.success(data))
     }
 }
 

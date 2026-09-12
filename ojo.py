@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "CamTuneApp/Support"))
-from scene_contract import ProfileStore, room_readback
+from scene_contract import ProfileStore, room_readback, camera_validated
 from concurrent.futures import ThreadPoolExecutor
 
 __version__ = "2.1.0"
@@ -376,14 +376,13 @@ def is_video_call_active():
     is active, the camera event is from our own app, not a video call.
     """
     state = _read_state()
-    if state.get("preview_active"):
-        return False, None
     # Absence of Ojo preview never proves an external call. A fresh observed
     # call control is required; process names/tabs are only hints.
     evidence = state.get("call_activity", {})
     observed = evidence.get("observed_at", 0)
     if (evidence.get("state") == "active" and evidence.get("source") == "accessibility"
             and evidence.get("leave_call_control") is True
+            and evidence.get("media_control") is True
             and isinstance(observed, (int, float)) and 0 <= time.time() - observed <= 5):
         return True, evidence.get("app")
     return False, None
@@ -580,20 +579,8 @@ def check_dependencies(require_claude=True):
     if not shutil.which("imagesnap"):
         missing.append(("imagesnap", "brew install imagesnap"))
 
-    # Check for uvcc — could be global or via npx
-    uvcc_ok = False
-    if shutil.which("uvcc"):
-        uvcc_ok = True
-    else:
-        try:
-            subprocess.run(
-                ["npx", "uvcc", "--version"],
-                capture_output=True, timeout=15,
-            )
-            uvcc_ok = True
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-    if not uvcc_ok:
+    # Dependency checks must never download or install a missing executable.
+    if not shutil.which("uvcc"):
         missing.append(("uvcc", "npm install -g uvcc"))
 
     if require_claude and not shutil.which("claude"):
@@ -609,9 +596,9 @@ def check_dependencies(require_claude=True):
 
 def uvcc(*args):
     """Run a uvcc command and return stdout."""
-    # Use npx to avoid requiring global install
-    cmd = ["npx", "uvcc"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    # Never let a control command download or install a package implicitly.
+    cmd = ["/opt/homebrew/bin/uvcc"] + list(args)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=True)
     return result.stdout.strip()
 
 
@@ -1525,6 +1512,7 @@ def run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
     )
     scene["measured_at"] = captured_at
     scene["camera_id"] = getattr(args, "camera_identity", None)
+    scene["camera_validated"] = camera_validated(scene["camera_id"])
     scene["trigger"] = getattr(args, "trigger", "manual")
     # Reachability probes are not actuator readback; never promote skipped or
     # legacy plain-text probes to confirmed physical state.
@@ -1574,6 +1562,8 @@ def run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
 def cmd_check(args, camera_name):
     cached = load_recent_check_cache(getattr(args, "max_age_seconds", 0))
     if cached:
+        # Reassess stored evidence at the current time, never replay cached Green.
+        cached = dict(classify_scene(cached.get("scene",{})),cached=True)
         if args.json:
             print(json.dumps(cached, sort_keys=True))
         else:
@@ -1655,16 +1645,38 @@ def cmd_log_call(args):
         final_state=args.final_state,
         rescue_count=args.rescue_count,
     )
+    row["assessment_contract"] = "scene_contract.v2"
+    row["boundary_source"] = getattr(args,"boundary_source","operator")
+    row["coverage"] = "interrupted_observation" if getattr(args,"observation_interrupted",False) else "observed_segment"
     if args.dry_run:
         print(json.dumps(row, sort_keys=True))
         return row
-    _append_jsonl(CALLS_PATH, row)
+    append_call_once(row, CALLS_PATH)
     if args.json:
         print(json.dumps(row, sort_keys=True))
     else:
         print(f"Logged call rollup: {args.app} ({row['duration_seconds']}s, "
               f"green={args.reached_green}, rescues={args.rescue_count})")
     return row
+
+
+def append_call_once(row, path):
+    """Retry-safe append: an acknowledged or lost-ack session is never doubled."""
+    import fcntl
+    os.makedirs(os.path.dirname(path),exist_ok=True)
+    with open(path,"a+") as handle:
+        fcntl.flock(handle,fcntl.LOCK_EX)
+        handle.seek(0)
+        for line in handle:
+            try:
+                if json.loads(line).get("call_session_id") == row["call_session_id"]:
+                    return False
+            except ValueError:
+                raise ValueError("Corrupt call log; preserve and repair before appending")
+        handle.write(json.dumps(row,sort_keys=True)+"\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return True
 
 
 def cmd_feedback(args):
@@ -2413,6 +2425,8 @@ def main():
     log_parser.add_argument("--worst-state", default=None)
     log_parser.add_argument("--final-state", default=None)
     log_parser.add_argument("--rescue-count", type=int, default=0)
+    log_parser.add_argument("--boundary-source", default="operator", choices=["operator","verified-call-observation"])
+    log_parser.add_argument("--observation-interrupted", action="store_true")
     log_parser.add_argument("--json", action="store_true")
     log_parser.add_argument(
         "--dry-run", action="store_true",

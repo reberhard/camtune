@@ -7,7 +7,7 @@ enum ProfileService {
     static let contextPresetsPath = profileDirectory.appendingPathComponent("app-presets.json")
 
     static func exists() -> Bool {
-        FileManager.default.fileExists(atPath: profilePath.path)
+        FileManager.default.fileExists(atPath: profileDirectory.appendingPathComponent("accepted-profiles-v2.json").path)
     }
 
     static func load() throws -> UVCSettings {

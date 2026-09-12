@@ -55,9 +55,32 @@ def validate_setting(control, value, ranges, settings):
         raise ValueError("Pan/tilt requires validated zoom headroom")
 
 
+def calibrated_ranges(ranges, calibration, zoom):
+    """A receipt may narrow device limits, never extend them."""
+    result = dict(ranges)
+    limits = calibration.get("pan_tilt_by_zoom", {}).get(str(zoom))
+    raw = ranges.get("absolute_pan_tilt", {})
+    if limits:
+        if not (len(limits) == 2 and all(len(row) == 3 and all(type(v) is int for v in row)
+                and row[2] > 0 for row in limits)
+                and all(raw["min"][i] <= limits[i][0] <= limits[i][1] <= raw["max"][i] for i in (0, 1))):
+            raise ValueError("Measured pan/tilt limits exceed device bounds")
+        result["absolute_pan_tilt"] = {"min": [row[0] for row in limits],
+            "max": [row[1] for row in limits], "res": [row[2] for row in limits]}
+    return result
+
+
+def write_order(control):
+    return (0 if control.startswith("auto_") else 1 if control == "absolute_zoom" else 2, control)
+
+
 def execute(vendor, product, changes, *, operation=None, issued=None, store=None, backend=uvcc):
     if type(vendor) is not int or type(product) is not int or vendor <= 0 or product <= 0:
         raise ValueError("Explicit camera identity required")
+    if not isinstance(changes,dict) or any(not isinstance(k,str) or not (
+        type(v) is int or isinstance(v,list) and v and all(type(item) is int for item in v)
+    ) for k,v in changes.items()):
+        raise ValueError("Typed camera control values required")
     identity = f"camera:{vendor}:{product}"
     selector = ["--vendor", vendor, "--product", product]
 
@@ -69,13 +92,21 @@ def execute(vendor, product, changes, *, operation=None, issued=None, store=None
         ranges = json.loads(backend(["ranges", *selector], deadline))
         if not isinstance(settings, dict) or not settings or not isinstance(ranges, dict):
             raise ValueError("Camera readback unavailable")
+        # uvcc lacks GET_RES for pan/tilt. Use only a matching office receipt,
+        # and never extend the current device-reported bounds.
+        validation = Path.home()/".config/camtune/stage2-office-validation.json"
+        if "absolute_pan_tilt" in changes and validation.exists():
+            from scene_contract import camera_validated
+            calibration=json.loads(validation.read_text())
+            if camera_validated(identity,validation):
+                ranges=calibrated_ranges(ranges,calibration,changes.get("absolute_zoom",settings.get("absolute_zoom")))
         # Validate the entire request before the first write. Camera compound
         # transactions must put auto-mode changes in a separate confirmed step.
         changed = {k: v for k, v in changes.items() if settings.get(k) != v}
         projected = dict(settings, **changed)
         for control, value in changed.items():
             validate_setting(control, value, ranges, projected)
-        ordered = sorted(changed, key=lambda k: (not k.startswith("auto_"), k))
+        ordered = sorted(changed, key=write_order)
         for control in ordered:
             value = changed[control]
             require_current(current)

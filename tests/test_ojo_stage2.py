@@ -10,14 +10,14 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "CamTuneApp/Support"))
 from scene_contract import assess, bucket, call_activity, ProfileStore, room_readback
-from scene_repair import fix_framing, framing_plan, lighting_plan, prepare_scene
+from scene_repair import fix_framing, framing_plan, lighting_plan, prepare_scene, cancel_operation, run_physical_framing
 from camera_control import execute, validate_setting
 from lib.ojo_controls import IntentStore
 
 
 def scene(**changes):
     now = time.time()
-    result = dict(camera_id="camera:1:2", measured_at=now, face_count=1,
+    result = dict(camera_id="camera:1:2", camera_validated=True, measured_at=now, face_count=1,
                   face_box=[.35, .3, .3, .4], face_luma_mean=120,
                   face_luma_p05=50, face_luma_p95=200, highlight_clip_pct=0,
                   shadow_clip_pct=0, rgb_balance=[1, 1, 1], background_luma_mean=85,
@@ -26,7 +26,7 @@ def scene(**changes):
     return result
 
 
-@pytest.mark.parametrize("key", ["camera_id", "measured_at", "face_count", "face_box", "face_luma_mean", "face_luma_p05", "face_luma_p95", "highlight_clip_pct", "shadow_clip_pct", "rgb_balance", "background_luma_mean", "profile_status", "actuator_status", "actuators_at"])
+@pytest.mark.parametrize("key", ["camera_id", "camera_validated", "measured_at", "face_count", "face_box", "face_luma_mean", "face_luma_p05", "face_luma_p95", "highlight_clip_pct", "shadow_clip_pct", "rgb_balance", "background_luma_mean", "profile_status", "actuator_status", "actuators_at"])
 def test_each_required_measurement_cannot_be_omitted(key):
     sample = scene()
     del sample[key]
@@ -85,7 +85,7 @@ def test_one_explicit_mexico_city_bucket(hour, expected):
 
 def test_presence_is_not_call_activity():
     assert call_activity({"app": "Zoom", "observed_at": time.time()})["state"] == "unknown"
-    assert call_activity({"app":"Zoom", "source":"accessibility", "leave_call_control":True, "observed_at":time.time()})["state"] == "active"
+    assert call_activity({"app":"Zoom", "source":"accessibility", "leave_call_control":True, "media_control":True, "observed_at":time.time()})["state"] == "active"
     assert call_activity({"app":"Zoom", "source":"accessibility", "leave_call_control":True, "observed_at":0})["state"] == "unknown"
 
 
@@ -126,6 +126,20 @@ def test_framing_numeric_improvement_and_all_settings_saved():
     result = fix_framing(camera, CALIBRATION, clock=lambda: camera.now)
     assert result["status"] == "improved"
     assert result["baseline"] == {"absolute_pan_tilt":[0,0], "absolute_zoom":150}
+
+
+def test_late_good_frame_cannot_escape_correction_deadline():
+    class SlowCamera(Camera):
+        def frame(self, after, deadline):
+            result = super().frame(after,deadline)
+            if self.writes:
+                self.now += 16
+                result["measured_at"] = self.now
+            return result
+    camera = SlowCamera([scene(face_box=[.05,.3,.3,.4]),scene()])
+    result = fix_framing(camera,CALIBRATION,clock=lambda:camera.now)
+    assert result["status"] == "worse_or_unverified_restored"
+    assert "budget" in result["reason"]
 
 
 @pytest.mark.parametrize("after", [scene(face_box=[.05,.3,.3,.4]), scene(face_count=0,face_box=None), scene(camera_id="wrong"), scene(highlight_clip_pct=10)])
@@ -264,3 +278,97 @@ def test_camera_old_intent_never_reaches_backend(tmp_path):
     result=execute(1,2,{"brightness":40},operation="old",issued=10,store=store,backend=lambda *args:calls.append(args))
     assert result["status"] == "superseded"
     assert not calls
+
+
+def test_cancel_only_invalidates_its_own_devices(tmp_path):
+    store=IntentStore(tmp_path)
+    store.register(["camera:1:2","overhead-left"],"scene",1)
+    store.register(["overhead-left"],"manual-off",2)
+    assert cancel_operation(store,"scene","camera:1:2") == 1
+    assert not store.current("camera:1:2","scene")
+    assert store.current("overhead-left","manual-off")
+
+
+def test_real_adapter_gate_and_preparation_dispatch_without_hardware(tmp_path):
+    payload=dict(vendor=1,product=2,camera_name="Test",operation_id="scene",issued=1,allow_room_changes=True)
+    missing=tmp_path/"validation.json"
+    assert run_physical_framing(payload,"prepare",validation_path=missing)["status"] == "could_not_verify"
+    calibration=dict(CALIBRATION,**{k:v for k,v in ROOM_CALIBRATION.items() if k!="camera_id"},
+                     stage1_accepted=True,validation_receipt="test-fixture-only")
+    missing.write_text(json.dumps(calibration))
+    room=Room(scene())
+    # Runtime clock used by dispatcher must see fresh fixture frames.
+    def frame(after,deadline):
+        result=scene(face_luma_mean=60) if not room.frames else scene()
+        room.frames+=1
+        result["measured_at"]=time.time()
+        return result
+    room.frame=frame
+    result=run_physical_framing(payload,"prepare",validation_path=missing,intent_store=IntentStore(tmp_path/"intents"),io_factory=lambda:room)
+    assert result["status"] == "improved", result
+    assert len(room.applied)==1
+
+
+def test_profile_participates_in_preparation_rollback():
+    class ProfileRoom(Room):
+        def __init__(self):
+            super().__init__(scene(face_luma_mean=60))
+            self.settings={"brightness":20}
+        def select_profile(self,scene):
+            return {"status":"compatible","profile":{"settings":{"brightness":40}}}
+        def read(self,deadline):
+            return dict(self.settings)
+        def write(self,changes,deadline):
+            self.settings.update(changes)
+            return dict(self.settings)
+        def restore(self,baseline,devices,deadline):
+            self.settings=baseline["camera:1:2"]
+            self.restored=True
+            return {"status":"confirmed"}
+    room=ProfileRoom()
+    assert prepare_scene(room,ROOM_CALIBRATION,set(),clock=lambda:room.now)["status"] == "worse_or_unverified_restored"
+    assert room.settings == {"brightness":20}
+
+
+def test_call_rollup_retry_is_idempotent_and_corruption_is_visible(tmp_path):
+    spec=importlib.util.spec_from_file_location("call_ojo",ROOT/"ojo.py")
+    ojo=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ojo)
+    path=str(tmp_path/"calls.jsonl")
+    row={"call_session_id":"fixture","boundary_source":"verified-call-observation"}
+    assert ojo.append_call_once(row,path)
+    assert not ojo.append_call_once(row,path)
+    assert len(Path(path).read_text().splitlines()) == 1
+    Path(path).write_text("corrupt\n")
+    with pytest.raises(ValueError,match="Corrupt"):
+        ojo.append_call_once(row,path)
+
+
+def test_cached_green_is_reassessed_with_original_capture_time(monkeypatch):
+    from types import SimpleNamespace
+    spec=importlib.util.spec_from_file_location("cached_ojo",ROOT/"ojo.py")
+    ojo=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ojo)
+    stale=scene(measured_at=time.time()-10)
+    monkeypatch.setattr(ojo,"load_recent_check_cache",lambda _: {"state":"green","scene":stale})
+    result=ojo.cmd_check(SimpleNamespace(max_age_seconds=45,json=True),"Test")
+    assert result["state"] == "unknown"
+    assert result["scene"]["measured_at"] == stale["measured_at"]
+
+
+def test_invalid_camera_payload_cannot_reach_hardware(tmp_path):
+    for changes in ({"brightness":True},{"unknown":None},{"absolute_pan_tilt":[]}):
+        with pytest.raises(ValueError,match="Typed"):
+            execute(1,2,changes,store=IntentStore(tmp_path),backend=lambda *_:pytest.fail("No hardware calls"))
+
+
+def test_calibration_cannot_extend_device_limits_and_zoom_precedes_pan():
+    from camera_control import calibrated_ranges, write_order
+    raw = {"absolute_pan_tilt":{"min":[-100,-100],"max":[100,100]}}
+    valid = {"pan_tilt_by_zoom":{"120":[[-50,50,10],[-40,40,10]]}}
+    assert calibrated_ranges(raw,valid,120)["absolute_pan_tilt"]["min"] == [-50,-40]
+    assert raw["absolute_pan_tilt"]["min"] == [-100,-100]
+    invalid = {"pan_tilt_by_zoom":{"120":[[-150,50,10],[-40,40,10]]}}
+    with pytest.raises(ValueError,match="bounds"):
+        calibrated_ranges(raw,invalid,120)
+    assert sorted(["absolute_pan_tilt","absolute_zoom","auto_focus"],key=write_order) == ["auto_focus","absolute_zoom","absolute_pan_tilt"]

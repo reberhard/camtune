@@ -34,6 +34,7 @@ def test_automatic_checks_do_not_actuate_framing():
 def base_scene(**overrides):
     scene = {
         "camera_id": "fixture-camera",
+        "camera_validated": True,
         "measured_at": time.time(),
         "profile_status": "compatible",
         "actuator_status": "confirmed",

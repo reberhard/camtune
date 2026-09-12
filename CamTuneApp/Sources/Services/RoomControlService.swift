@@ -46,6 +46,7 @@ final class RoomControlService {
         "both": ["curtain-left", "curtain-right"]]
     var devices: [String: RoomDevice] = [:]
     var isRefreshing = false
+    var intentGeneration = 0
     private var debounces: [String: Task<Void, Never>] = [:]
     private var started = false
 
@@ -102,14 +103,17 @@ final class RoomControlService {
     }
 
     func light(_ action: String, target: String, values: [String] = []) {
+        intentGeneration += 1
         send(action, target: target, values: values, curtains: false)
     }
 
     func curtain(_ action: String, target: String, position: Int? = nil) {
+        intentGeneration += 1
         send(action, target: target, values: position.map { [String($0)] } ?? [], curtains: true)
     }
 
     func adjust(target: String, hue: Int, saturation: Int, brightness: Int) {
+        intentGeneration += 1
         let ids = members(target)
         let operation = UUID().uuidString
         let issued = String(Int64(Date().timeIntervalSince1970 * 1_000_000_000))

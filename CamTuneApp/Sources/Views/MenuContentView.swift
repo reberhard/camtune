@@ -8,7 +8,7 @@ struct MenuContentView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("Scene readiness not verified")
+                    Text(state.readinessSummary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let reason = state.preCallReason {
@@ -16,6 +16,11 @@ struct MenuContentView: View {
                     }
                     Text("Framing and scene preparation await office validation")
                         .font(.caption2).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Check") { Task { await state.checkNow() } }
+                        Button("Make Me Look Good") { Task { await state.meetingReadyNow() } }
+                    }
+                    .disabled(state.isChecking || state.isMeetingReadyRunning)
 
                     // Lights and curtains are the first screen, not behind a
                     // disclosure or a tab. Ryan, 2026-09-03: "I want to be
@@ -70,12 +75,12 @@ struct MenuContentView: View {
 
             HStack {
                 Toggle(isOn: $state.autoCheckEnabled) {
-                    Text(AppState.sceneRepairEnabled ? "Auto-check" : "Auto-check unavailable")
+                    Text(AppState.observeChecksEnabled ? "Auto-check (observe only)" : "Auto-check awaits call validation")
                         .font(.system(size: 10))
                 }
                 .toggleStyle(.switch)
                 .controlSize(.mini)
-                .disabled(!AppState.sceneRepairEnabled)
+                .disabled(!AppState.observeChecksEnabled)
 
                 Spacer()
 
@@ -521,6 +526,8 @@ private struct AdvancedView: View {
             Text(state.browserAutomationStatus)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+            Text(state.callActivityReason)
+                .font(.caption2).foregroundStyle(.secondary)
 
             HStack {
                 Button("Refresh") {

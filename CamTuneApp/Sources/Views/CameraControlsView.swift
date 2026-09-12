@@ -121,6 +121,11 @@ struct CameraControlsView: View {
                 }
 
                 compositionControls
+                    .disabled(!state.canAdjustComposition)
+                if !state.canAdjustComposition {
+                    Text("Pan/tilt unavailable until this zoom's direction, limits and step size are validated")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
 
                 Button("Fix Framing — measured") {
                     Task { await state.applyFramingRecommendation() }
@@ -128,19 +133,26 @@ struct CameraControlsView: View {
                 .disabled(state.currentDevice == nil || state.isChecking)
                 .help("Requires office direction, zoom-limit and call-preview validation before any movement")
 
+                Toggle("Allow this scene to adjust room controls", isOn: $state.allowSceneRoomChanges)
+                    .font(.caption)
+                    .help("Off preserves manual light and curtain choices; bulbs that are off remain off")
+                HStack {
+                    Button("Make Me Look Good") { Task { await state.meetingReadyNow() } }
+                    Button("AI Tune") { Task { await state.deepRepairNow() } }
+                        .help("Explicitly sends one preview image to Claude to choose among validated room adjustments")
+                }
+                .disabled(state.isChecking || state.isMeetingReadyRunning || state.currentDevice == nil)
+                if state.activePreparationID != nil {
+                    Button("Cancel preparation") { Task { await state.cancelPreparation() } }
+                }
+                ForEach(Array(state.preparationOutcomes.enumerated()), id: \.offset) { _, outcome in
+                    Text("Preparation step — " + outcome).font(.caption).foregroundStyle(.secondary)
+                }
+
                 Divider()
 
                 // Actions
                 HStack(spacing: 8) {
-                    Button {
-                        Task { await state.calibrateNow() }
-                    } label: {
-                        Label("Safe Calibrate", systemImage: "slider.horizontal.3")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(state.currentDevice == nil || state.isChecking || state.isCalibrating || state.isDeepRepairing || state.isMeetingReadyRunning)
-
                     Button("Reset") {
                         Task { await state.restoreProfile() }
                     }
@@ -288,6 +300,7 @@ struct CameraControlsView: View {
         }
         .toggleStyle(.switch)
         .controlSize(.small)
+        .disabled(currentValue == nil)
     }
 
     private func sliderRow(key: String, label: String, range: UVCRange) -> some View {

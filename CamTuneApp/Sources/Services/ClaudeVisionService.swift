@@ -8,9 +8,10 @@ enum ClaudeVisionService {
         cameraName: String,
         currentSettings: UVCSettings,
         ranges: [String: UVCRange],
-        model: String = "sonnet"
+        model: String = "opus",
+        constrainedPrompt: String? = nil
     ) async throws -> OptimizationResult {
-        let prompt = buildPrompt(
+        let prompt = constrainedPrompt ?? buildPrompt(
             cameraName: cameraName,
             currentSettings: currentSettings,
             ranges: ranges,
@@ -71,6 +72,8 @@ enum ClaudeVisionService {
                 "--output-format", "stream-json",
                 "--model", model,
                 "--no-session-persistence",
+                "--tools", "",
+                "--disable-slash-commands",
             ],
             input: inputStr.data(using: .utf8),
             timeout: .seconds(120)
