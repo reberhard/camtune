@@ -9,5 +9,6 @@ let package = Package(
             name: "OjoApp",
             path: "Sources"
         ),
+        .testTarget(name: "OjoAppTests", dependencies: ["OjoApp"], path: "Tests"),
     ]
 )

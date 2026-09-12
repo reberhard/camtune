@@ -2,15 +2,15 @@ import SwiftUI
 
 struct MenuContentView: View {
     @Bindable var state: AppState
+    @State private var cameraExpanded = false
 
     var body: some View {
         VStack(spacing: 0) {
-            preview
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    ReadinessView(state: state)
-                    PrimaryActionsView(state: state)
+                    Text("Scene readiness not verified")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
                     // Lights and curtains are the first screen, not behind a
                     // disclosure or a tab. Ryan, 2026-09-03: "I want to be
@@ -20,18 +20,23 @@ struct MenuContentView: View {
                         Text("Lights")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        LightsControlView(state: state)
-                            .frame(maxHeight: 220)
+                        BasicLightsView(room: state.room)
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Curtains")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        CurtainsControlView(state: state)
+                        BasicCurtainsView(room: state.room)
                     }
 
-                    FineTuneView(state: state)
+                    DisclosureGroup("Camera preview & manual controls", isExpanded: $cameraExpanded) {
+                        preview
+                        FineTuneView(state: state)
+                    }
+                    .onChange(of: cameraExpanded) { _, expanded in
+                        if expanded { state.startPreview() } else { state.stopPreview() }
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -60,11 +65,12 @@ struct MenuContentView: View {
 
             HStack {
                 Toggle(isOn: $state.autoCheckEnabled) {
-                    Text("Auto-check")
+                    Text(AppState.sceneRepairEnabled ? "Auto-check" : "Auto-check unavailable")
                         .font(.system(size: 10))
                 }
                 .toggleStyle(.switch)
                 .controlSize(.mini)
+                .disabled(!AppState.sceneRepairEnabled)
 
                 Spacer()
 
@@ -83,7 +89,7 @@ struct MenuContentView: View {
             await state.startUp()
         }
         .onAppear {
-            state.startPreview()
+            state.room.refresh()
         }
         .onDisappear {
             if !state.isOptimizing
@@ -528,11 +534,11 @@ private struct AdvancedView: View {
 
             Divider()
 
-            Button("Calibrate Camera") {
+            Button("Calibrate Camera (unavailable during repair)") {
                 Task { await state.calibrateNow() }
             }
             .controlSize(.small)
-            .disabled(state.currentDevice == nil)
+            .disabled(true)
 
             Button(role: .destructive) {
                 Task { await state.deepRepairNow() }
@@ -540,7 +546,7 @@ private struct AdvancedView: View {
                 Label("Deep Repair", systemImage: "wand.and.stars.inverse")
             }
             .controlSize(.small)
-            .disabled(state.currentDevice == nil)
+            .disabled(true)
 
             Divider()
 

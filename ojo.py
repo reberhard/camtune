@@ -2570,6 +2570,13 @@ def main():
 
     args = parser.parse_args()
 
+    # Stage 1 contains unfinished writers. Read-only checks and profile records
+    # remain available; AI/hold loops cannot overwrite explicit room controls.
+    if args.command in (None, "calibrate", "optimize") or (
+        args.command == "daemon" and args.daemon_command in ("run", "install")
+    ):
+        parser.error("Automatic repair is unavailable during the Stage 1 control repair")
+
     if args.command == "feedback":
         cmd_feedback(args)
         return

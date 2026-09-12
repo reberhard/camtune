@@ -1,0 +1,19 @@
+{
+  "schema": "gg-session-lease.v1",
+  "branch": "session/gg-mini/20260910-181518-61da/ojo-stage1",
+  "repo": "camtune",
+  "host": "gg-mini",
+  "session_id": "20260910-181518-61da",
+  "purpose": "ojo-stage1",
+  "paths": [
+    "CamTuneApp/",
+    "ojo.py",
+    "tests/"
+  ],
+  "worktree": "/Users/eberhard/gg-worktrees/camtune/20260910-181518-61da",
+  "base": "940c5d20f162fc517c1d921768f4d55d906d7732",
+  "created_at": "2026-09-11T00:15:19+00:00",
+  "status": "released",
+  "agent": "",
+  "released_at": "2026-09-11T00:29:14+00:00"
+}

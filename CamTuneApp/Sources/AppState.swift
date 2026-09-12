@@ -112,6 +112,8 @@ struct SceneMetrics: Sendable {
 @MainActor
 @Observable
 final class AppState {
+    let room = RoomControlService()
+    static let sceneRepairEnabled = false
     var currentDevice: CameraDevice?
     var currentSettings = UVCSettings()
     var ranges: [String: UVCRange] = [:]
@@ -132,7 +134,7 @@ final class AppState {
     var preCallLastChecked: Date?
     var preCallBlockingIssue: String?
     var isChecking = false
-    var autoCheckEnabled = true
+    var autoCheckEnabled = false
     var detectedCallApp: String?
     var lastAutoCheckReason: String?
     var isDeepRepairing = false
@@ -188,6 +190,7 @@ final class AppState {
     }
 
     var menuBarTitle: String {
+        if !Self.sceneRepairEnabled { return "Ojo" }
         switch preCallState?.lowercased() {
         case "green": return "Ojo Green"
         case "yellow": return "Ojo Yellow"
@@ -197,6 +200,7 @@ final class AppState {
     }
 
     var menuBarSystemImage: String {
+        if !Self.sceneRepairEnabled { return "eye" }
         switch preCallState?.lowercased() {
         case "green": return "checkmark.circle.fill"
         case "yellow": return "exclamationmark.triangle.fill"
@@ -206,13 +210,14 @@ final class AppState {
     }
 
     func startUp() async {
+        room.start()
         NotificationService.requestAuthorization()
         await refreshPermissionStatus()
         lightControlAvailable = LightService.isAvailable()
         curtainControlAvailable = CurtainService.isAvailable()
         refreshDaemonStatus()
         savedProfileExists = ProfileService.exists()
-        startAutomaticChecks()
+        if Self.sceneRepairEnabled { startAutomaticChecks() }
         if curtainControlAvailable {
             Task { await refreshCurtainStatus() }
         }
@@ -463,6 +468,7 @@ final class AppState {
     }
 
     func calibrateNow() async {
+        guard Self.sceneRepairEnabled else { return }
         guard let device = currentDevice else { return }
         guard !isChecking, !isCalibrating, !isDeepRepairing, !isMeetingReadyRunning else { return }
         isCalibrating = true
@@ -512,6 +518,7 @@ final class AppState {
     }
 
     func deepRepairNow() async {
+        guard Self.sceneRepairEnabled else { return }
         guard let device = currentDevice else { return }
         guard !isChecking, !isCalibrating, !isDeepRepairing, !isMeetingReadyRunning else { return }
         isDeepRepairing = true
@@ -545,6 +552,7 @@ final class AppState {
     }
 
     func meetingReadyNow() async {
+        guard Self.sceneRepairEnabled else { return }
         guard !isChecking, !isCalibrating, !isDeepRepairing, !isMeetingReadyRunning else { return }
         isMeetingReadyRunning = true
         statusMessage = "Preparing meeting setup..."
@@ -736,6 +744,7 @@ final class AppState {
     }
 
     private func maybeSendCallGuardNotification(reason: String, state: String?) {
+        guard Self.sceneRepairEnabled else { return }
         guard reason != "manual",
               reason != "framing fix",
               reason != "background fix",
@@ -1032,6 +1041,7 @@ final class AppState {
     }
 
     func applyFramingRecommendation(recheck: Bool = true) async {
+        guard Self.sceneRepairEnabled else { return }
         let previousScore = preCallQualityScore
         // A frame can be wrong in more than one dimension. The previous
         // implementation fixed only the first warning,
@@ -1124,6 +1134,7 @@ final class AppState {
     // MARK: - Light Controls
 
     func applyBackgroundFix(recheck: Bool = true) async {
+        guard Self.sceneRepairEnabled else { return }
         guard lightControlAvailable else {
             lightingPlanSummary = "No controllable desk lights here. Move away from bright backgrounds or add a lamp beside the camera."
             statusMessage = "Lighting guidance ready"
@@ -1153,6 +1164,7 @@ final class AppState {
     }
 
     func applyVideoReadyLights() async {
+        guard Self.sceneRepairEnabled else { return }
         guard lightControlAvailable else {
             lightingPlanSummary = "No controllable desk lights here. Use soft light facing you and keep the background slightly dimmer."
             statusMessage = "Lighting guidance ready"
@@ -1172,6 +1184,7 @@ final class AppState {
     }
 
     func applyProductionLighting(recheck: Bool = true) async {
+        guard Self.sceneRepairEnabled else { return }
         guard lightControlAvailable else {
             lightingPlanSummary = portableLightingGuidance()
             statusMessage = "Lighting guidance ready"
