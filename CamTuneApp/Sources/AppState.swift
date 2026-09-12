@@ -33,6 +33,10 @@ enum OjoTab: String, CaseIterable {
 }
 
 struct SceneMetrics: Sendable {
+    var measuredAt = Date()
+    var faceCount: Int? = nil
+    var photometry: [String: Double] = [:]
+    var cameraID: String? = nil
     let faceBox: CGRect?
     let faceCenterX: Double?
     let faceCenterY: Double?
@@ -44,28 +48,35 @@ struct SceneMetrics: Sendable {
     let exposureHint: String?
 
     init(payload: [String: Any]) {
-        if let values = payload["face_bbox"] as? [Double], values.count == 4 {
+        measuredAt = Date(timeIntervalSince1970: (payload["measured_at"] as? Double) ?? 0)
+        faceCount = payload["face_count"] as? Int
+        cameraID = payload["camera_id"] as? String
+        for key in ["face_luma_mean", "face_luma_p05", "face_luma_p95", "background_luma_mean", "highlight_clip_pct", "shadow_clip_pct"] {
+            photometry[key] = (payload[key] as? NSNumber)?.doubleValue
+        }
+        if let rgb = payload["rgb_balance"] as? [Double], rgb.count == 3 {
+            photometry["red_balance"] = rgb[0]; photometry["green_balance"] = rgb[1]; photometry["blue_balance"] = rgb[2]
+        }
+        if let values = payload["face_box"] as? [Double], values.count == 4 {
             faceBox = CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+        } else if let values = payload["face_bbox"] as? [Double], values.count == 4 {
+            faceBox = CGRect(x: values[0], y: 1 - values[1] - values[3], width: values[2], height: values[3])
         } else if let values = payload["face_bbox"] as? [NSNumber], values.count == 4 {
             faceBox = CGRect(
                 x: values[0].doubleValue,
-                y: values[1].doubleValue,
+                y: 1 - values[1].doubleValue - values[3].doubleValue,
                 width: values[2].doubleValue,
                 height: values[3].doubleValue
             )
         } else {
             faceBox = nil
         }
-        faceCenterX = (payload["face_center_x"] as? NSNumber)?.doubleValue
+        faceCenterX = faceBox.map { Double($0.midX) }
         // ojo.py receives Vision's lower-left coordinates; the Swift preview
         // uses upper-left coordinates. Keep one visual convention in the UI.
-        if let centerY = (payload["face_center_y"] as? NSNumber)?.doubleValue {
-            faceCenterY = 1 - centerY
-        } else {
-            faceCenterY = nil
-        }
+        faceCenterY = faceBox.map { Double($0.midY) }
         headroomPct = (payload["headroom_pct"] as? NSNumber)?.doubleValue
-        faceHeightPct = (payload["face_height_pct"] as? NSNumber)?.doubleValue
+        faceHeightPct = faceBox.map { Double($0.height) }
         faceLumaMean = (payload["face_luma_mean"] as? NSNumber)?.doubleValue
         backgroundLumaMean = (payload["background_luma_mean"] as? NSNumber)?.doubleValue
         backgroundSeparation = (payload["background_separation"] as? NSNumber)?.doubleValue
@@ -73,18 +84,22 @@ struct SceneMetrics: Sendable {
     }
 
     init(
-        faceBox: CGRect,
+        faceBox: CGRect?,
         faceLumaMean: Double? = nil,
-        backgroundLumaMean: Double? = nil
+        backgroundLumaMean: Double? = nil,
+        faceCount: Int? = 1,
+        measuredAt: Date = Date()
     ) {
+        self.faceCount = faceCount
+        self.measuredAt = measuredAt
         self.faceBox = faceBox
-        faceCenterX = faceBox.midX
-        faceCenterY = faceBox.midY
+        faceCenterX = faceBox.map { Double($0.midX) }
+        faceCenterY = faceBox.map { Double($0.midY) }
         // Vision's face rectangle starts below the crown. Use an estimated
         // crown for composition so Ojo does not call empty facial space
         // "headroom" and show a misleadingly low-in-frame face as balanced.
-        headroomPct = max(0, faceBox.minY - faceBox.height * faceCrownHeightMultiplier)
-        faceHeightPct = faceBox.height
+        headroomPct = faceBox.map { max(0, $0.minY - $0.height * faceCrownHeightMultiplier) }
+        faceHeightPct = faceBox.map { Double($0.height) }
         self.faceLumaMean = faceLumaMean
         self.backgroundLumaMean = backgroundLumaMean
         if let faceLumaMean, let backgroundLumaMean {
@@ -113,6 +128,12 @@ struct SceneMetrics: Sendable {
 @Observable
 final class AppState {
     let room = RoomControlService()
+    let cameraControls = CameraControlService()
+    var callActivityReason = "Call activity not verified"
+    private var assessmentGeneration = UUID()
+    private var cameraGeneration = 0
+    private var compositionUndo: UVCSettings?
+    private var freshnessTask: Task<Void, Never>?
     static let sceneRepairEnabled = false
     var currentDevice: CameraDevice?
     var currentSettings = UVCSettings()
@@ -224,7 +245,8 @@ final class AppState {
 
         do {
             let devices = try await UVCService.listDevices()
-            guard let device = devices.first else {
+            let brio = devices.filter { $0.name.localizedCaseInsensitiveContains("Brio") }
+            guard brio.count == 1, let device = brio.first else {
                 error = "No UVC camera detected"
                 return
             }
@@ -242,14 +264,28 @@ final class AppState {
     func startPreview() {
         guard captureSession == nil else { return }
         do {
-            if let avDevice = CameraCaptureService.findCamera() {
-                cameraService.sceneHandler = { [weak self] scene in
+            if let selected = currentDevice, let avDevice = CameraCaptureService.findCamera(named: selected.name) {
+                cameraService.sceneHandler = { [weak self] incoming in
                     guard let self else { return }
+                    var scene = incoming
+                    scene.cameraID = "camera:\(selected.vendor):\(selected.product)"
                     self.lastScene = scene
-                    self.lastSceneUpdatedAt = Date()
+                    self.lastSceneUpdatedAt = scene.measuredAt
                     self.refreshLivePreviewCheckIfNeeded(scene)
                 }
                 captureSession = try cameraService.startSession(device: avDevice)
+                freshnessTask?.cancel()
+                freshnessTask = Task { [weak self] in
+                    while !Task.isCancelled {
+                        do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                        guard let self else { return }
+                        if self.freshLiveScene == nil {
+                            self.assessmentGeneration = UUID()
+                            self.preCallState = "unknown"
+                            self.preCallReason = "Camera frame missing or stale"
+                        }
+                    }
+                }
                 writeState(previewActive: true)
             }
         } catch {
@@ -259,6 +295,13 @@ final class AppState {
 
     /// Stop the camera preview (called when menu bar popover closes).
     func stopPreview() {
+        freshnessTask?.cancel()
+        freshnessTask = nil
+        assessmentGeneration = UUID()
+        lastScene = nil
+        lastSceneUpdatedAt = nil
+        preCallState = "unknown"
+        preCallReason = "Camera preview stopped — scene not verified"
         guard captureSession != nil else { return }
         cameraService.stopSession()
         captureSession = nil
@@ -373,98 +416,54 @@ final class AppState {
     }
 
     private func applyLivePreviewCheck(_ scene: SceneMetrics) {
-        error = nil
-        statusMessage = nil
-        lastAutoCheckReason = nil
+        // Preview and Check execute exactly the same Python contract.
+        // Captured time is never renewed by a redraw or delayed completion.
+        let generation = UUID()
+        assessmentGeneration = generation
         lastScene = scene
-        lastSceneUpdatedAt = Date()
-        preCallLastChecked = Date()
-
-        var issues: [String] = []
-        var strengths: [String] = []
-
-        if scene.faceBox == nil {
-            preCallState = "red"
-            preCallReason = "no face detected"
-            preCallBlockingIssue = "no face detected"
-            preCallQualityLabel = nil
-            preCallQualityScore = nil
-            preCallQualityIssue = "no face detected"
-            preCallQualityIssues = ["no face detected"]
-            preCallQualityStrengths = []
-            return
-        }
-
-        if let y = scene.faceCenterY {
-            if y < 0.42 {
-                issues.append("face too high")
-            } else if y > 0.58 {
-                issues.append("face too low")
-            } else {
-                strengths.append("face is vertically centered")
+        lastSceneUpdatedAt = scene.measuredAt
+        Task {
+            do {
+                let payload = await scenePayload(scene)
+                let result = try await SceneContractService.call("assess", payload: payload)
+                guard assessmentGeneration == generation else { return }
+                preCallState = result["state"] as? String ?? "unknown"
+                preCallReason = result["reason"] as? String
+                preCallLastChecked = scene.measuredAt
+                preCallQualityScore = nil
+                preCallQualityLabel = nil
+                let quality = result["quality"] as? [String: Any]
+                preCallQualityIssues = quality?["issues"] as? [String] ?? []
+                preCallQualityStrengths = quality?["strengths"] as? [String] ?? []
+                preCallQualityIssue = preCallQualityIssues.first
+                preCallBlockingIssue = preCallState == "red" ? preCallReason : nil
+                // Device errors are owned by their writer, never cleared here.
+            } catch {
+                guard assessmentGeneration == generation else { return }
+                preCallState = "unknown"
+                preCallReason = "Assessment unavailable: " + error.localizedDescription
             }
         }
+    }
 
-        if let x = scene.faceCenterX {
-            if x < 0.38 {
-                issues.append("face too far left")
-            } else if x > 0.62 {
-                issues.append("face too far right")
-            } else {
-                strengths.append("face is centered")
-            }
+    private func scenePayload(_ scene: SceneMetrics) async -> [String: Any] {
+        var payload: [String: Any] = scene.photometry
+        payload["measured_at"] = scene.measuredAt.timeIntervalSince1970
+        payload["camera_id"] = scene.cameraID
+        payload["face_count"] = scene.faceCount
+        if let box = scene.faceBox { payload["face_box"] = [box.minX, box.minY, box.width, box.height] }
+        if let r = scene.photometry["red_balance"], let g = scene.photometry["green_balance"], let b = scene.photometry["blue_balance"] {
+            payload["rgb_balance"] = [r, g, b]
         }
-
-        if let height = scene.faceHeightPct {
-            if height < 0.25 {
-                issues.append("face too small")
-            } else if height > 0.55 {
-                issues.append("face too large")
-            } else {
-                strengths.append("zoom looks right")
-            }
-        }
-
-        if let face = scene.faceLumaMean {
-            if face < 85 {
-                issues.append("face reads a little dark")
-            } else if face >= faceWhiteLumaWarn,
-                      let separation = scene.backgroundSeparation,
-                      separation > faceWhiteSeparationWarn {
-                issues.append("face reads too white or flat for the saved preference")
-            } else if face > 165 {
-                issues.append("face risks looking too bright or flat")
-            } else {
-                strengths.append("face exposure is in range")
-            }
-        }
-
-        if let separation = scene.backgroundSeparation {
-            if separation < 10 {
-                issues.append("background is not separated enough from face")
-            } else if separation > 65 {
-                issues.append("background may be too dark relative to face")
-            } else {
-                strengths.append("face/background separation is good")
-            }
-        }
-
-        let score = max(0, min(100, 100 - issues.count * 12))
-        preCallQualityScore = score
-        preCallQualityLabel = score >= 88 ? "great" : score >= 75 ? "good" : score >= 60 ? "acceptable" : "weak"
-        preCallQualityIssues = issues
-        preCallQualityStrengths = strengths
-        preCallQualityIssue = issues.first
-
-        if issues.isEmpty {
-            preCallState = "green"
-            preCallReason = "preview check passed"
-            preCallBlockingIssue = nil
-        } else {
-            preCallState = "yellow"
-            preCallReason = issues.first
-            preCallBlockingIssue = nil
-        }
+        let rows = ["overhead-left", "overhead-right", "cafe", "pie", "curtain-left", "curtain-right"].map { room.devices[$0] }
+        payload["actuator_status"] = rows.contains { $0?.failed == true } ? "failed" :
+            rows.allSatisfy { $0?.observation != nil && $0?.pending == nil && $0?.observedAt != nil } ? "confirmed" : "unknown"
+        payload["actuators_at"] = rows.compactMap { $0?.observedAt?.timeIntervalSince1970 }.min()
+        do {
+            let profile = try await SceneContractService.call("profile-select", payload: payload)
+            payload["profile_status"] = profile["status"] as? String ?? "unknown"
+        } catch { payload["profile_status"] = "unknown" }
+        return payload
     }
 
     func calibrateNow() async {
@@ -626,49 +625,44 @@ final class AppState {
     }
 
     func saveProfile() async {
-        guard let device = currentDevice else { return }
-        do {
-            let settings = try await UVCService.exportSettings(
-                vendor: device.vendor, product: device.product)
-            try ProfileService.save(settings)
-            try? ProfileService.saveContextPreset(
-                settings: settings,
-                appName: detectedCallApp,
-                qualityScore: preCallQualityScore
-            )
-            savedProfileExists = true
-            // Phase 2 (2026-09-03): also bank this into the real
-            // time-bucket profile map (specs/ojo.md), so the classifier's
-            // profile-freshness check has a real, bucket-aware entry for
-            // right now instead of only the single profile.json's mtime.
-            // Best-effort: profile.json is already saved above regardless.
-            _ = try? await ShellRunner.run(
-                executablePath: "/usr/bin/python3",
-                arguments: [ojoPath, "profiles", "--save", "--json", "--skip-lights"],
-                timeout: .seconds(15)
-            )
-            statusMessage = "Profile saved"
-            try? await Task.sleep(for: .seconds(2))
-            statusMessage = nil
-        } catch {
-            self.error = error.localizedDescription
+        guard let device = currentDevice, freshLiveScene != nil else {
+            error = "A fresh camera frame is required to accept a profile"; return
         }
+        do {
+            let settings = try await UVCService.exportSettings(vendor: device.vendor, product: device.product)
+            guard let scene = freshLiveScene else { throw CocoaError(.fileReadCorruptFile) }
+            let encoded = try JSONEncoder().encode(settings)
+            let payload = await scenePayload(scene)
+            _ = try await SceneContractService.call("profile-save", payload: [
+                "scene": payload, "settings": try JSONSerialization.jsonObject(with: encoded)])
+            savedProfileExists = true
+            statusMessage = "Accepted profile saved"
+        } catch { self.error = "Profile not saved: " + error.localizedDescription }
     }
 
     func restoreProfile() async {
-        guard let device = currentDevice else { return }
-        do {
-            let profile = try ProfileService.load()
-            try await UVCService.applySettings(
-                profile, vendor: device.vendor, product: device.product)
-            currentSettings = try await UVCService.exportSettings(
-                vendor: device.vendor, product: device.product)
-            statusMessage = "Profile restored"
-            try? await Task.sleep(for: .seconds(2))
-            statusMessage = nil
-        } catch {
-            self.error = error.localizedDescription
+        guard let device = currentDevice, let scene = freshLiveScene else {
+            error = "A fresh camera frame is required before profile restoration"; return
         }
+        cameraGeneration += 1
+        let generation = cameraGeneration
+        let operation = UUID()
+        let issued = Int64(Date().timeIntervalSince1970 * 1_000_000_000)
+        do {
+            let selection = try await SceneContractService.call("profile-select", payload: await scenePayload(scene))
+            guard selection["status"] as? String == "compatible",
+                  let profile = selection["profile"] as? [String: Any],
+                  let raw = profile["settings"] as? [String: Any] else {
+                throw NSError(domain: "OjoProfile", code: 1, userInfo: [NSLocalizedDescriptionKey: "No accepted profile compatible with this camera and lighting"])
+            }
+            let settings = try JSONDecoder().decode(UVCSettings.self, from: JSONSerialization.data(withJSONObject: raw))
+            guard cameraGeneration == generation else { return }
+            currentSettings = try await UVCService.transaction(settings, vendor: device.vendor, product: device.product,
+                                                               operation: operation, issued: issued)
+            guard cameraGeneration == generation else { return }
+            statusMessage = "Profile camera settings confirmed; scene improvement not yet verified"
+            if let fresh = freshLiveScene { applyLivePreviewCheck(fresh) }
+        } catch { self.error = "Profile restoration not confirmed: " + error.localizedDescription }
     }
 
     func refreshSettings() async {
@@ -724,13 +718,13 @@ final class AppState {
             return
         }
         lastScene = SceneMetrics(payload: scene)
-        lastSceneUpdatedAt = Date()
+        lastSceneUpdatedAt = lastScene?.measuredAt
     }
 
     private var freshLiveScene: SceneMetrics? {
         guard let lastScene,
               let lastSceneUpdatedAt,
-              Date().timeIntervalSince(lastSceneUpdatedAt) < 5
+              Date().timeIntervalSince(lastSceneUpdatedAt) < 2
         else { return nil }
         return lastScene
     }
@@ -738,7 +732,7 @@ final class AppState {
     private func refreshLivePreviewCheckIfNeeded(_ scene: SceneMetrics) {
         guard !isChecking, !isCalibrating, !isDeepRepairing, !isMeetingReadyRunning else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastPreviewAssessmentAt) >= 2 else { return }
+        guard scene.faceCount != 1 || now.timeIntervalSince(lastPreviewAssessmentAt) >= 1 else { return }
         lastPreviewAssessmentAt = now
         applyLivePreviewCheck(scene)
     }
@@ -798,11 +792,9 @@ final class AppState {
 
     private func runAutomaticCheckIfNeeded() async {
         guard autoCheckEnabled else { return }
-        guard let appName = activeVideoCallAppName() else {
-            if detectedCallApp != nil {
-                await finishCallSession() // call just ended
-            }
-            detectedCallApp = nil
+        guard let appName = await activeVideoCallAppName() else {
+            // Missing evidence is not an observed call-end event. Preserve
+            // the session until an actual boundary can be verified.
             return
         }
         if activeCallSession == nil {
@@ -848,22 +840,10 @@ final class AppState {
             executablePath: "/usr/bin/python3", arguments: arguments, timeout: .seconds(10))
     }
 
-    private func activeVideoCallAppName() -> String? {
-        let apps: [String: String] = [
-            "us.zoom.xos": "Zoom",
-            "com.apple.FaceTime": "FaceTime",
-            "com.microsoft.teams2": "Teams",
-            "com.microsoft.teams": "Teams",
-            "com.cisco.webexmeetingsapp": "Webex",
-        ]
-        for app in NSWorkspace.shared.runningApplications {
-            guard app.activationPolicy == .regular,
-                  let bundleID = app.bundleIdentifier,
-                  let name = apps[bundleID]
-            else { continue }
-            return name
-        }
-        return activeBrowserCallName()
+    private func activeVideoCallAppName() async -> String? {
+        let activity = await CallActivityService.observe()
+        callActivityReason = activity.reason
+        return activity.state == "active" ? activity.app : nil
     }
 
     private func activeBrowserCallName() -> String? {
@@ -942,158 +922,91 @@ final class AppState {
     // MARK: - Camera Controls (real-time slider changes)
 
     func setUVCControl(_ control: String, value: Int) async {
+        if UVCSettings.autoControls.contains(control) {
+            queueCamera(control, value: .int(value)); return
+        }
+        guard let range = ranges[control] else {
+            cameraControls.errors[control] = "Unsupported control or range unavailable"; return
+        }
+        queueCamera(control, value: .int(range.clamp(value)))
+    }
+
+    private func queueCamera(_ control: String, value: UVCSettings.SettingValue) {
         guard let device = currentDevice else { return }
-        // Update local state immediately for responsive UI
-        currentSettings.values[control] = .int(value)
-        // Debounce the actual UVC call + profile save
-        pendingUVCTask?.cancel()
-        pendingUVCTask = Task {
-            try? await Task.sleep(for: .milliseconds(50))
-            guard !Task.isCancelled else { return }
-            try? await UVCService.set(
-                control: control, value: value,
-                vendor: device.vendor, product: device.product)
-            // Write to profile.json so the daemon hold loop picks up the change
-            // instead of reverting it
-            try? ProfileService.save(currentSettings)
+        cameraGeneration += 1
+        cameraControls.set(control, value: value, device: device) { [weak self] result in
+            guard let self else { return }
+            for (key, value) in result.values { self.currentSettings.values[key] = value }
         }
     }
 
     func setFoV(_ degrees: Int) async {
-        guard let device = currentDevice else { return }
-        // Brio 505 FoV maps to absolute_zoom ranges
-        // 90 = 100 (min zoom), 78 = 150, 65 = 200
-        let zoomValue: Int
-        switch degrees {
-        case 90: zoomValue = 100
-        case 78: zoomValue = 150
-        case 65: zoomValue = 200
-        default: zoomValue = 100
-        }
-        currentSettings.values["absolute_zoom"] = .int(zoomValue)
-        try? await UVCService.set(
-            control: "absolute_zoom", value: zoomValue,
-            vendor: device.vendor, product: device.product)
+        // Degree-to-zoom mapping was guessed; do not offer it as calibration.
+        error = "Field-of-view degrees are not calibrated. Use the confirmed Zoom control."
     }
 
     func nudgeComposition(dx: Int, dy: Int) async {
-        guard let device = currentDevice else { return }
-        let current = currentSettings.intArrayValue(for: "absolute_pan_tilt") ?? [0, 0]
-        lastComposition = current
-        let pan = clampPanTilt((current.first ?? 0) + dx)
-        let tilt = clampPanTilt((current.dropFirst().first ?? 0) + dy)
-        let values = [pan, tilt]
-        currentSettings.values["absolute_pan_tilt"] = .intArray(values)
-        do {
-            try await UVCService.set(
-                control: "absolute_pan_tilt",
-                values: values,
-                vendor: device.vendor,
-                product: device.product
-            )
-            try? ProfileService.save(currentSettings)
-        } catch {
-            self.error = error.localizedDescription
+        guard let values = currentSettings.intArrayValue(for: "absolute_pan_tilt"), values.count == 2 else {
+            error = "Pan/tilt state unavailable"; return
         }
+        lastComposition = values
+        compositionUndo = currentSettings
+        queueCamera("absolute_pan_tilt", value: .intArray([values[0] + dx, values[1] + dy]))
     }
 
     func resetComposition() async {
-        guard let device = currentDevice else { return }
-        lastComposition = currentSettings.intArrayValue(for: "absolute_pan_tilt") ?? [0, 0]
-        let values = [0, 0]
-        currentSettings.values["absolute_pan_tilt"] = .intArray(values)
-        do {
-            try await UVCService.set(
-                control: "absolute_pan_tilt",
-                values: values,
-                vendor: device.vendor,
-                product: device.product
-            )
-            try? ProfileService.save(currentSettings)
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-
-    private func clampPanTilt(_ value: Int) -> Int {
-        min(max(value, -72000), 72000)
+        compositionUndo = currentSettings
+        queueCamera("absolute_pan_tilt", value: .intArray([0, 0]))
     }
 
     func undoCompositionNudge() async {
-        guard let device = currentDevice, let values = lastComposition else { return }
-        currentSettings.values["absolute_pan_tilt"] = .intArray(values)
+        guard let saved = compositionUndo, let device = currentDevice else { return }
+        cameraGeneration += 1
+        let generation = cameraGeneration
+        var changes = UVCSettings()
+        for key in ["absolute_pan_tilt", "absolute_zoom"] { changes.values[key] = saved.values[key] }
         do {
-            try await UVCService.set(
-                control: "absolute_pan_tilt",
-                values: values,
-                vendor: device.vendor,
-                product: device.product
-            )
-            try? ProfileService.save(currentSettings)
+            let observed = try await UVCService.transaction(changes, vendor: device.vendor, product: device.product)
+            guard cameraGeneration == generation else { return }
+            currentSettings = observed
+            compositionUndo = nil
             lastComposition = nil
-        } catch {
-            self.error = error.localizedDescription
-        }
+        } catch { self.error = "Undo not confirmed: " + error.localizedDescription }
     }
 
-    func setCompositionStep(_ value: Int) {
-        compositionStep = value
-    }
+    func setCompositionStep(_ value: Int) { compositionStep = value }
 
     func applyFramingRecommendation(recheck: Bool = true) async {
-        guard Self.sceneRepairEnabled else { return }
-        let previousScore = preCallQualityScore
-        // A frame can be wrong in more than one dimension. The previous
-        // implementation fixed only the first warning,
-        // forcing a second click when the face was also too small. Build one
-        // composed adjustment from every current framing issue, then verify
-        // the resulting image once.
-        let issue = (preCallQualityIssues + [preCallQualityIssue ?? "", preCallReason ?? ""])
-            .joined(separator: " ")
-            .lowercased()
-        var horizontal = 0
-        var vertical = 0
-        var zoom = 0
-
-        if issue.contains("face too low") {
-            vertical += compositionStep
-        } else if issue.contains("face too high") {
-            vertical -= compositionStep
+        guard let device = currentDevice, !isChecking else { return }
+        let validation = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/camtune/stage2-office-validation.json")
+        guard FileManager.default.fileExists(atPath: validation.path) else {
+            error = "Framing repair awaits office camera-direction and call-preview validation."; return
         }
-        if issue.contains("too far right") {
-            horizontal -= compositionStep
-        } else if issue.contains("too far left") {
-            horizontal += compositionStep
-        }
-        if issue.contains("face too small") {
-            zoom += 20
-        } else if issue.contains("face too large") {
-            zoom -= 20
-        }
-
-        guard horizontal != 0 || vertical != 0 || zoom != 0 else {
-            statusMessage = "Framing already balanced"
-            try? await Task.sleep(for: .milliseconds(700))
-            statusMessage = nil
-            return
-        }
-
-        statusMessage = "Adjusting framing..."
-        if horizontal != 0 || vertical != 0 {
-            await nudgeComposition(dx: horizontal, dy: vertical)
-        }
-        if zoom != 0 {
-            await nudgeZoom(delta: zoom)
-        }
-        if recheck {
-            await performCheck(reason: "framing fix", allowCached: false)
-        }
-        if let previousScore, let score = preCallQualityScore {
-            let delta = score - previousScore
-            statusMessage = delta >= 0 ? "Framing fix improved +\(delta)" : "Framing fix changed \(delta)"
-            try? await Task.sleep(for: recheck ? .seconds(2) : .milliseconds(700))
-            statusMessage = nil
-        }
+        cameraGeneration += 1
+        let generation = cameraGeneration
+        let operation = UUID()
+        let payload: [String: Any] = ["vendor":device.vendor,"product":device.product,"camera_name":device.name,
+            "operation_id":operation.uuidString,"issued":Int64(Date().timeIntervalSince1970 * 1_000_000_000)]
+        isChecking = true
+        statusMessage = "Measuring framing and preparing rollback…"
+        defer { isChecking = false }
+        do {
+            let input = try JSONSerialization.data(withJSONObject: payload)
+            let output = try await ShellRunner.run(executablePath: "/opt/homebrew/bin/python3",
+                arguments: [SceneContractService.supportDirectory.appendingPathComponent("scene_repair.py").path,
+                            "frame",String(decoding:input,as:UTF8.self)], timeout:.seconds(30))
+            guard cameraGeneration == generation else { return }
+            guard let result = try JSONSerialization.jsonObject(with:Data(output.utf8)) as? [String:Any],
+                  let status = result["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }
+            if status == "improved", let baseline = result["baseline"] as? [String:Any] {
+                compositionUndo = try JSONDecoder().decode(UVCSettings.self,from:JSONSerialization.data(withJSONObject:baseline))
+                statusMessage = "Framing improvement measured; scene readiness still requires all checks"
+                await refreshSettings()
+            } else {
+                statusMessage = nil
+                self.error = "Framing \(status): \(result["reason"] as? String ?? "Not confirmed")"
+            }
+        } catch { self.error = "Framing not confirmed: " + error.localizedDescription; statusMessage = nil }
     }
 
     private var hasFramingFix: Bool {
@@ -1113,22 +1026,9 @@ final class AppState {
     }
 
     func nudgeZoom(delta: Int) async {
-        guard let device = currentDevice else { return }
-        let range = ranges["absolute_zoom"] ?? UVCRange(min: 100, max: 400)
-        let current = currentSettings.intValue(for: "absolute_zoom") ?? range.min
-        let value = range.clamp(current + delta)
-        currentSettings.values["absolute_zoom"] = .int(value)
-        do {
-            try await UVCService.set(
-                control: "absolute_zoom",
-                value: value,
-                vendor: device.vendor,
-                product: device.product
-            )
-            try? ProfileService.save(currentSettings)
-        } catch {
-            self.error = error.localizedDescription
-        }
+        guard let current = currentSettings.intValue(for: "absolute_zoom") else { return }
+        compositionUndo = currentSettings
+        await setUVCControl("absolute_zoom", value: current + delta)
     }
 
     // MARK: - Light Controls

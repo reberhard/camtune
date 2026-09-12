@@ -11,6 +11,11 @@ struct MenuContentView: View {
                     Text("Scene readiness not verified")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let reason = state.preCallReason {
+                        Text(reason).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("Framing and scene preparation await office validation")
+                        .font(.caption2).foregroundStyle(.secondary)
 
                     // Lights and curtains are the first screen, not behind a
                     // disclosure or a tab. Ryan, 2026-09-03: "I want to be

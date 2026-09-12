@@ -21,6 +21,14 @@ struct CameraControlsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
+                if !state.cameraControls.pending.isEmpty {
+                    Text("Camera change pending readback").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(state.cameraControls.errors.keys.sorted(), id: \.self) { key in
+                    Text("\(key): \(state.cameraControls.errors[key] ?? "Not confirmed")")
+                        .font(.caption).foregroundStyle(.red)
+                }
+                if state.ranges.isEmpty { Text("Camera controls unavailable: no verified ranges").font(.caption) }
                 // Auto toggles
                 ForEach(Self.autoToggles, id: \.key) { control in
                     autoToggleRow(key: control.key, label: control.label, onValue: control.onValue)
@@ -47,7 +55,7 @@ struct CameraControlsView: View {
                                 range: range
                             ),
                             in: Double(range.min)...Double(range.max),
-                            step: 100
+                            step: Double(range.step)
                         )
                         .controlSize(.small)
                         .disabled(state.currentSettings.intValue(for: "auto_white_balance_temperature") == 1)
@@ -82,7 +90,7 @@ struct CameraControlsView: View {
                                 range: range
                             ),
                             in: Double(range.min)...Double(range.max),
-                            step: 10
+                            step: Double(range.step)
                         )
                         .controlSize(.small)
                         .disabled(state.currentSettings.intValue(for: "auto_exposure_mode") == 8)
@@ -91,7 +99,7 @@ struct CameraControlsView: View {
 
                 // FoV presets
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Field of View")
+                    Text("Field of View — degree presets uncalibrated")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     HStack(spacing: 4) {
@@ -102,6 +110,7 @@ struct CameraControlsView: View {
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                             .font(.caption)
+                            .disabled(true)
                         }
                     }
                 }
@@ -112,6 +121,12 @@ struct CameraControlsView: View {
                 }
 
                 compositionControls
+
+                Button("Fix Framing — measured") {
+                    Task { await state.applyFramingRecommendation() }
+                }
+                .disabled(state.currentDevice == nil || state.isChecking)
+                .help("Requires office direction, zoom-limit and call-preview validation before any movement")
 
                 Divider()
 
@@ -290,9 +305,10 @@ struct CameraControlsView: View {
             Slider(
                 value: sliderBinding(key: key, range: range),
                 in: Double(range.min)...Double(range.max),
-                step: 1
+                step: Double(range.step)
             )
             .controlSize(.small)
+            .disabled(state.currentSettings.values[key] == nil || (key == "gain" && state.currentSettings.intValue(for: "auto_exposure_mode") != 1))
         }
     }
 
