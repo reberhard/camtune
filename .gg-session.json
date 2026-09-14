@@ -1,19 +1,19 @@
 {
   "schema": "gg-session-lease.v1",
-  "branch": "session/gg-mini/20260912-083116-74bd/ojo-stage2",
+  "branch": "session/gg-mini/20260914-092002-662b/ojo-camera-calibration",
   "repo": "camtune",
   "host": "gg-mini",
-  "session_id": "20260912-083116-74bd",
-  "purpose": "ojo-stage2",
+  "session_id": "20260914-092002-662b",
+  "purpose": "ojo-camera-calibration",
   "paths": [
-    "CamTuneApp",
+    "CamTuneApp/",
     "ojo.py",
-    "tests"
+    "tests/"
   ],
-  "worktree": "/Users/eberhard/gg-worktrees/camtune/20260912-083116-74bd",
-  "base": "c1ad744581f2c8ca509e142c8202a6a9e04831ca",
-  "created_at": "2026-09-12T14:31:17+00:00",
+  "worktree": "/Users/eberhard/gg-worktrees/camtune/20260914-092002-662b",
+  "base": "108c46972df6051be0db33116f0641dc2f38ee31",
+  "created_at": "2026-09-14T15:20:03+00:00",
   "status": "released",
   "agent": "",
-  "released_at": "2026-09-12T15:39:07+00:00"
+  "released_at": "2026-09-14T15:28:55+00:00"
 }

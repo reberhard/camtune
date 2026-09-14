@@ -4,10 +4,14 @@ The installed UI cannot enable these engines until a real office calibration
 supplies the direction/response map and call-preview parity receipt. Tests use
 injected clocks, frames and devices, never actual camera/room writes.
 """
+import json
 import math
+import subprocess
+import sys
 import time
 import threading
-from scene_contract import assess, finite, fresh
+from scene_contract import assess, finite, fresh, clamp_box
+from camera_control import pan_tilt_limits
 
 _shutdown = threading.Event()
 
@@ -16,18 +20,55 @@ class Cancelled(Exception):
     pass
 
 
+# Homebrew Python (needed for the kasa light SDK) has no Vision framework;
+# macOS system Python does. Found live 2026-09-14: the engine ran its face
+# detector in an interpreter without Vision and reported "no face" forever.
+DETECTOR_INTERPRETERS = ("/usr/bin/python3", sys.executable)
+_DETECTOR_CODE = (
+    "import importlib.util, json, sys\n"
+    "import Vision\n"
+    "spec = importlib.util.spec_from_file_location('ojo_vision', sys.argv[1])\n"
+    "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)\n"
+    "print(json.dumps(module.detect_face_bboxes(sys.argv[2])))\n"
+)
+
+
+def detect_faces_strict(ojo_path, image_path, deadline):
+    """Vision face rectangles from an interpreter that has Vision; a missing
+    detector is an error, never an empty 'no face' result."""
+    failure = "no interpreter tried"
+    for interpreter in DETECTOR_INTERPRETERS:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            raise TimeoutError("No time for face detection")
+        try:
+            result = subprocess.run([interpreter, "-c", _DETECTOR_CODE, str(ojo_path), str(image_path)],
+                                    capture_output=True, text=True, timeout=min(remaining, 8), check=True)
+            boxes = json.loads(result.stdout)
+            if not isinstance(boxes, list):
+                raise ValueError("Detector returned no list")
+            return boxes
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+            stderr = getattr(exc, "stderr", "") or ""
+            failure = (stderr.strip().splitlines() or [type(exc).__name__])[-1]
+    raise ValueError("Face detector unavailable: " + failure)
+
+
 def framing_error(scene):
-    box = scene.get("face_box")
-    if scene.get("face_count") != 1 or not isinstance(box, list) or len(box) != 4 or not all(finite(v) for v in box):
-        raise ValueError("One numeric face rectangle required")
+    box, clipped = clamp_box(scene.get("face_box")) if scene.get("face_count") == 1 else (None, False)
+    if box is None:
+        raise ValueError("One face rectangle overlapping the frame required")
     x, y, w, h = box
-    if min(x, y) < 0 or min(w, h) <= 0 or x + w > 1 or y + h > 1:
-        raise ValueError("Invalid face geometry")
+    if clipped:
+        # A cut-off face is a framing error by definition; its size is unknown.
+        return distance_outside(x + w / 2, .38, .62) + max(distance_outside(y + h / 2, .42, .58), .05)
     # Error is distance OUTSIDE the accepted composition region, not a
     # cosmetic score. Zero is balanced, and zero gain is never improvement.
-    def distance(v, low, high):
-        return max(low - v, 0, v - high)
-    return distance(x + w / 2, .38, .62) + distance(y + h / 2, .42, .58) + distance(h, .25, .55)
+    return distance_outside(x + w / 2, .38, .62) + distance_outside(y + h / 2, .42, .58) + distance_outside(h, .25, .55)
+
+
+def distance_outside(v, low, high):
+    return max(low - v, 0, v - high)
 
 
 def bounded(value, spec):
@@ -42,7 +83,7 @@ def framing_plan(scene, settings, calibration):
     if not calibration.get("call_preview_parity") or calibration.get("camera_id") != scene.get("camera_id"):
         raise ValueError("Camera direction and call-preview parity not validated")
     framing_error(scene)
-    x, y, w, h = scene["face_box"]
+    (x, y, w, h), clipped = clamp_box(scene["face_box"])
     pan, tilt = settings["absolute_pan_tilt"]
     zoom = settings["absolute_zoom"]
     # Measured signed response per unit, not assumed arrow direction.
@@ -51,20 +92,31 @@ def framing_plan(scene, settings, calibration):
     dz = calibration["face_height_per_zoom"]
     if not all(finite(v) and v != 0 for v in (dx, dy, dz)):
         raise ValueError("Camera response calibration missing")
+    # Digital pan/tilt displaces the face in proportion to zoom; the receipt
+    # states the zoom its response was measured at.
+    reference = calibration.get("response_reference_zoom")
+    if finite(reference) and reference > 0:
+        dx, dy = dx * zoom / reference, dy * zoom / reference
+    # Largest single correction the receipt measured as safe (face stayed
+    # detected). Absent, keep the conservative one-degree bound.
+    step = calibration.get("max_pan_tilt_step", 3600)
+    if not finite(step) or step <= 0:
+        raise ValueError("Invalid pan/tilt step bound")
+    gain = .8  # aim short of centre; the loop re-measures before the next move
     zoom_ranges = calibration["ranges"]["absolute_zoom"]
     # Current zoom's measured pan/tilt limits must be provided by calibration.
-    limits = calibration["pan_tilt_by_zoom"].get(str(zoom))
+    limits = pan_tilt_limits(calibration, zoom)
     if not limits:
         raise ValueError("Pan/tilt limits at this zoom are unverified")
     changes = {}
     px, py = x + w / 2, y + h / 2
     if not .38 <= px <= .62:
-        pan = bounded(pan + max(-3600, min(3600, (.5 - px) / dx)), limits[0])
+        pan = bounded(pan + max(-step, min(step, gain * (.5 - px) / dx)), limits[0])
     if not .42 <= py <= .58:
-        tilt = bounded(tilt + max(-3600, min(3600, (.5 - py) / dy)), limits[1])
+        tilt = bounded(tilt + max(-step, min(step, gain * (.5 - py) / dy)), limits[1])
     if [pan, tilt] != settings["absolute_pan_tilt"]:
         changes["absolute_pan_tilt"] = [pan, tilt]
-    if not .25 <= h <= .55:
+    if not clipped and not .25 <= h <= .55:
         desired = bounded(zoom + max(-20, min(20, (.4 - h) / dz)), zoom_ranges)
         if desired != zoom:
             changes["absolute_zoom"] = desired
@@ -300,8 +352,10 @@ def run_physical_framing(payload, mode="frame", *, validation_path=None, intent_
     vendor, product = payload["vendor"], payload["product"]
     identity = f"camera:{vendor}:{product}"
     if (calibration.get("camera_id") != identity or not calibration.get("call_preview_parity")
-            or not calibration.get("stage1_accepted") or not calibration.get("validation_receipt")):
-        return {"status":"could_not_verify", "reason":"Camera-matched office acceptance receipt is incomplete"}
+            or not calibration.get("validation_receipt")):
+        return {"status":"could_not_verify", "reason":"Camera-matched calibration receipt is incomplete"}
+    if mode != "frame" and not calibration.get("stage1_accepted"):
+        return {"status":"could_not_verify", "reason":"Room preparation requires Stage 1 acceptance in the receipt"}
     # A manual request is stamped before any subprocess; never refresh its
     # timestamp when a later step executes.
     operation, issued = payload["operation_id"], payload["issued"]
@@ -351,16 +405,19 @@ def run_physical_framing(payload, mode="frame", *, validation_path=None, intent_
 
         def frame(self, after, deadline):
             remaining = deadline - time.time()
-            if remaining <= .3:
+            if remaining <= 1:
                 raise TimeoutError("No time for a settled frame")
             # Temporary private image exists only for local measurement and is
             # deleted by the context manager on success, cancellation or error.
+            # imagesnap opens the device, warms up and captures in 2-4 s on the
+            # Brio (measured 2026-09-14); a 3 s cap made the engine roll back
+            # a correct move. The operation deadline still bounds the whole run.
             with tempfile.TemporaryDirectory(prefix="ojo-frame-") as directory:
                 path = str(Path(directory)/"frame.jpg")
-                subprocess.run(["/opt/homebrew/bin/imagesnap", "-d", payload["camera_name"], "-w", "0.3", path],
-                               capture_output=True, timeout=min(remaining,3), check=True)
+                subprocess.run(["/opt/homebrew/bin/imagesnap", "-d", payload["camera_name"], "-w", "0.5", path],
+                               capture_output=True, timeout=min(remaining,6), check=True)
                 captured = time.time()
-                boxes = ojo.detect_face_bboxes(path)
+                boxes = detect_faces_strict(repo / "ojo.py", path, deadline)
                 scene = ojo.describe_scene(path,boxes)
                 scene.update(camera_id=identity,measured_at=captured,camera_validated=True)
                 if scene.get("face_bbox"):

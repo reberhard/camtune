@@ -18,6 +18,34 @@ def finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+CALIBRATION_KEYS = ("face_x_per_pan", "face_y_per_tilt", "face_height_per_zoom")
+
+
+def clamp_box(box):
+    """Clip a normalized upper-left face rectangle to the frame.
+
+    Vision extrapolates a full rectangle for a face cut off at an edge (found
+    live 2026-09-14: the camera pointed at the ceiling and the box hung below
+    the frame). Returns (box, clipped); (None, False) when no usable overlap.
+    """
+    if not (isinstance(box, list) and len(box) == 4 and all(finite(v) for v in box)):
+        return None, False
+    x, y, w, h = box
+    if w <= 0 or h <= 0:
+        return None, False
+    x0, y0, x1, y1 = max(0.0, x), max(0.0, y), min(1.0, x + w), min(1.0, y + h)
+    if x1 - x0 <= 0.01 or y1 - y0 <= 0.01:
+        return None, False
+    clipped = x < -0.002 or y < -0.002 or x + w > 1.002 or y + h > 1.002
+    return ([x0, y0, x1 - x0, y1 - y0] if clipped else list(box)), clipped
+
+
+def clipped_edges(box):
+    x, y, w, h = box
+    return [name for hit, name in ((y < -0.002, "top"), (y + h > 1.002, "bottom"),
+                                   (x < -0.002, "left"), (x + w > 1.002, "right")) if hit]
+
+
 def fresh(timestamp, now, age=2):
     return finite(timestamp) and 0 <= now - timestamp <= age
 
@@ -36,33 +64,34 @@ def assess(scene, now=None):
         checks[key] = {"state": state, "reason": reason}
 
     camera = scene.get("camera_id")
-    camera_ok = camera and fresh(scene.get("measured_at"), now) and scene.get("camera_validated") is True
+    camera_fresh = fresh(scene.get("measured_at"), now)
+    camera_ok = camera and camera_fresh and scene.get("camera_validated") is True
     put("camera", "green" if camera_ok else "unknown",
-        "fresh validated camera frame" if camera_ok else "camera identity, office validation or fresh frame missing")
+        "fresh validated camera frame" if camera_ok else "camera identity missing" if not camera
+        else "camera frame stale" if not camera_fresh else "camera calibration receipt missing or mismatched")
     count = scene.get("face_count")
     if type(count) is not int or count < 0:
         count = None
     put("face", "green" if count == 1 else "red" if count in (0,) or (finite(count) and count > 1) else "unknown",
         "one face detected" if count == 1 else "no face detected" if count == 0 else "multiple faces detected" if finite(count) and count > 1 else "face detection unavailable")
-    box = scene.get("face_box")
-    valid_box = (isinstance(box, list) and len(box) == 4 and all(finite(v) for v in box)
-                 and all(0 <= v <= 1 for v in box) and box[2] > 0 and box[3] > 0
-                 and box[0] + box[2] <= 1.001 and box[1] + box[3] <= 1.001)
+    box, clipped = clamp_box(scene.get("face_box"))
     framing = []
-    if valid_box and count == 1:
+    if box and count == 1:
         x, y, w, h = box
-        for value, low, high, below, above in (
-            (x + w / 2, .38, .62, "face too far left", "face too far right"),
-            (y + h / 2, .42, .58, "face too high", "face too low"),
-            (h, .25, .55, "face too small", "face too large"),
-        ):
+        if clipped:
+            framing.append("face cut off at " + "/".join(clipped_edges(scene["face_box"])))
+        rules = [(x + w / 2, .38, .62, "face too far left", "face too far right"),
+                 (y + h / 2, .42, .58, "face too high", "face too low")]
+        if not clipped:  # size of a partly visible face is unknown
+            rules.append((h, .25, .55, "face too small", "face too large"))
+        for value, low, high, below, above in rules:
             if value < low:
                 framing.append(below)
             elif value > high:
                 framing.append(above)
         put("framing", "yellow" if framing else "green", ", ".join(framing) or "framing looks balanced")
     else:
-        put("framing", "unknown", "one valid face rectangle required")
+        put("framing", "unknown", "one face rectangle overlapping the frame required")
 
     required = ["face_luma_mean", "face_luma_p05", "face_luma_p95", "highlight_clip_pct", "shadow_clip_pct"]
     if count != 1 or not all(finite(scene.get(k)) for k in required):
@@ -245,8 +274,12 @@ def camera_validated(camera_id, path=None):
     path=Path(path) if path else Path.home()/".config/camtune/stage2-office-validation.json"
     try:
         receipt=json.loads(path.read_text())
+        # Camera movement needs the measured camera response, not Stage 1
+        # light/curtain acceptance; room preparation checks stage1_accepted itself.
         return bool(camera_id and receipt.get("camera_id")==camera_id and receipt.get("call_preview_parity") is True
-                    and receipt.get("stage1_accepted") is True and receipt.get("validation_receipt"))
+                    and receipt.get("validation_receipt")
+                    and all(finite(receipt.get(k)) and receipt.get(k) != 0 for k in CALIBRATION_KEYS)
+                    and isinstance(receipt.get("pan_tilt_by_zoom"), dict) and receipt["pan_tilt_by_zoom"])
     except (ValueError,OSError,AttributeError):
         return False
 

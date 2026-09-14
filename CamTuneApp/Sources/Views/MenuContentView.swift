@@ -14,8 +14,14 @@ struct MenuContentView: View {
                     if let reason = state.preCallReason {
                         Text(reason).font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("Framing and scene preparation await office validation")
-                        .font(.caption2).foregroundStyle(.secondary)
+                    if !state.canAdjustComposition {
+                        Text("Framing awaits a measured camera calibration receipt")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if !state.canPrepareScene {
+                        Text("Scene preparation awaits room-effect validation")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                     HStack {
                         Button("Check") { Task { await state.checkNow() } }
                         Button("Make Me Look Good") { Task { await state.meetingReadyNow() } }

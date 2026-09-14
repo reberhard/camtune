@@ -372,3 +372,74 @@ def test_calibration_cannot_extend_device_limits_and_zoom_precedes_pan():
     with pytest.raises(ValueError,match="bounds"):
         calibrated_ranges(raw,invalid,120)
     assert sorted(["absolute_pan_tilt","absolute_zoom","auto_focus"],key=write_order) == ["auto_focus","absolute_zoom","absolute_pan_tilt"]
+
+
+# 2026-09-14 regression: camera pointed at the ceiling, Vision box hanging below the frame.
+CEILING_BOX = [.406, .9564, .1763, .3134]
+
+
+def test_clipped_face_rectangle_is_a_framing_warning_not_unknown():
+    from scene_contract import clamp_box
+    checks = assess(scene(face_box=CEILING_BOX))["checks"]
+    assert checks["framing"]["state"] == "yellow"
+    assert "cut off at bottom" in checks["framing"]["reason"] and "face too low" in checks["framing"]["reason"]
+    assert "too small" not in checks["framing"]["reason"]
+    assert clamp_box([.4, -.5, .2, .4]) == (None, False)
+    assert clamp_box([.35, .3, .3, .4]) == ([.35, .3, .3, .4], False)
+
+
+def test_camera_check_names_the_missing_item():
+    checks = assess(scene(camera_validated=False))["checks"]
+    assert checks["camera"]["reason"] == "camera calibration receipt missing or mismatched"
+    checks = assess(scene(measured_at=0))["checks"]
+    assert checks["camera"]["reason"] == "camera frame stale"
+
+
+def test_framing_plan_uses_measured_step_default_zoom_row_and_clipped_box():
+    from scene_repair import framing_plan
+    calibration = dict(CALIBRATION, pan_tilt_by_zoom={"default": [[-72000, 72000, 3600], [-72000, 72000, 3600]]},
+                       max_pan_tilt_step=36000, response_reference_zoom=150,
+                       face_y_per_tilt=5e-6, face_x_per_pan=-5e-6)
+    settings = {"absolute_pan_tilt": [0, 0], "absolute_zoom": 150}
+    changes = framing_plan(scene(face_box=CEILING_BOX), settings, calibration)
+    assert changes["absolute_pan_tilt"] == [0, -36000]   # low face -> negative tilt, bounded by the measured step
+    assert "absolute_zoom" not in changes                 # size unknown while the face is clipped
+    with pytest.raises(ValueError, match="unverified"):
+        framing_plan(scene(face_box=CEILING_BOX), dict(settings, absolute_zoom=100), calibration)
+    # Without a measured step the old one-degree bound still applies.
+    conservative = framing_plan(scene(face_box=CEILING_BOX), settings, dict(calibration, max_pan_tilt_step=3600))
+    assert conservative["absolute_pan_tilt"] == [0, -3600]
+
+
+def test_camera_validated_needs_measured_calibration_not_stage1(tmp_path):
+    from scene_contract import camera_validated
+    path = tmp_path / "receipt.json"
+    path.write_text(json.dumps(dict(CALIBRATION, validation_receipt="fixture")))
+    assert camera_validated("camera:1:2", path)
+    path.write_text(json.dumps(dict(CALIBRATION, validation_receipt="fixture", face_y_per_tilt=0)))
+    assert not camera_validated("camera:1:2", path)
+    path.write_text(json.dumps(dict(CALIBRATION, validation_receipt="fixture", stage1_accepted=True, pan_tilt_by_zoom={})))
+    assert not camera_validated("camera:1:2", path)
+
+
+def test_frame_adapter_needs_calibration_only_and_prepare_needs_stage1(tmp_path):
+    payload = dict(vendor=1, product=2, camera_name="Test", operation_id="op", issued=1, allow_room_changes=False)
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps(dict(CALIBRATION, validation_receipt="fixture")))
+    assert run_physical_framing(payload, "prepare", validation_path=receipt)["reason"].startswith("Room preparation requires Stage 1")
+
+
+def test_python_face_crop_is_clipped_to_the_image():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ojo_clip", Path(__file__).resolve().parents[1] / "ojo.py")
+    ojo = importlib.util.module_from_spec(spec); spec.loader.exec_module(ojo)
+    left, top, right, bottom = ojo._bbox_to_pixels([.406, -.2698, .1763, .3134], 1920, 1080)
+    assert 0 <= left < right <= 1920 and 0 <= top < bottom <= 1080
+    assert ojo._bbox_to_pixels([.4, .3, .2, .2], 1000, 1000) == (400, 500, 600, 700)
+
+
+def test_engine_face_detector_failure_is_an_error_not_no_face(monkeypatch, tmp_path):
+    import scene_repair
+    monkeypatch.setattr(scene_repair, "DETECTOR_INTERPRETERS", ("/nonexistent/python3",))
+    with pytest.raises(ValueError, match="Face detector unavailable"):
+        scene_repair.detect_faces_strict(tmp_path / "ojo.py", tmp_path / "frame.jpg", time.time() + 5)
