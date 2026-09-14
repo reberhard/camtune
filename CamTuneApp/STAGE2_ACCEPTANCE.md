@@ -1,6 +1,14 @@
 # Stage 2 implementation and acceptance ledger
 
-Status: in progress, not installed or accepted. September 12, 2026.
+Status: framing and Stage 1 accepted on hardware September 14, 2026; room preparation and call signatures still gated. (September 12 text below is historical.)
+
+## September 14, 2026 update
+
+- Root cause of the framing failure: the September 10 auto-framing loop tilted the Brio to +32400 with an inverted sign; this build then gated every pan/tilt write behind a receipt no code creates, rejected pan/tilt in its validator (no uvcc step size), and ran Vision in Homebrew Python, which has no Vision framework. Fixed in PR #3 (`94a00de`) and PR #4 (`8e02da1`); shared controller fixes in clawd-workspace PR #63 and #64.
+- Receipt `~/.config/camtune/stage2-office-validation.json` written from a live calibration with Ryan in frame (negative tilt = face up, negative pan = face right, no movement at zoom 100, response scales with zoom). `stage1_accepted` and `curtains_validated` true after the installed-UI acceptance round; `room_effects_verified` and `call_signatures_verified` false.
+- Hardware evidence: low face centered in one correction (3.8 s); ceiling position centered in two (6.8 s); Stage 1 S1-01/02/03/05/06 confirmed in the controller journal with Ryan observing; Stop settle defect fixed.
+- Remaining items 1-2 below are done; item 3 (room effects), 5 (call signatures) and the UX pass are open. Resume plan: `gg-steve/memory/working-context/ojo-next-phases-resume-2026-09-14.md`.
+
 
 Contract: gg-steve/memory/grill-packets/grill-with-docs-ojo-repair-stages-2026-09-10.md.
 Ryan authorized Stage 2 implementation; his deferral of live office testing remains in force.
