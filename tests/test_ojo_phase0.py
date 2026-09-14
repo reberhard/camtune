@@ -95,8 +95,10 @@ def test_classifier_yellow_for_stale_profile():
 def test_classifier_failed_actuator_is_not_hidden_by_good_image():
     result = ojo.classify_scene(base_scene(lights_reachable=False))
 
-    assert result["state"] == "red"
-    assert result["checks"]["lights"]["reason"] == "required actuator state failed"
+    # Well-lit face: missing readback blocks Green and stays visible, but is
+    # not a measured blocker (2026-09-14).
+    assert result["state"] == "unknown"
+    assert result["checks"]["lights"]["reason"] == "light readback failed (Refresh to retry)"
 
 
 def test_framing_uses_estimated_crown_not_vision_face_top():
@@ -125,7 +127,7 @@ def test_classifier_red_when_lights_unreachable_and_scene_needs_light():
     ))
 
     assert result["state"] == "red"
-    assert result["checks"]["lights"]["reason"] == "required actuator state failed"
+    assert result["checks"]["lights"]["reason"] == "light readback failed; face needs light (Refresh to retry)"
 
 
 def test_profile_map_selects_current_bucket(monkeypatch, tmp_path):

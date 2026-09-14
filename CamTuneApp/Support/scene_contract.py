@@ -127,10 +127,20 @@ def assess(scene, now=None):
     put("profile", "green" if profile == "compatible" else "yellow" if profile in ("missing", "stale", "incompatible") else "unknown",
         "accepted compatible profile" if profile == "compatible" else "profile " + str(profile))
     lights = scene.get("actuator_status", "unknown")
+    failed = scene.get("actuator_failed")
+    failed = [str(d) for d in failed] if isinstance(failed, list) else []
     if lights == "confirmed" and fresh(scene.get("actuators_at"), now, 10):
         put("lights", "green", "required actuator readback confirmed")
+    elif lights == "failed":
+        # A bulb we could not read is missing evidence. It is a blocker only
+        # when the face also needs light (2026-09-14: one lost discovery reply
+        # painted a well-lit scene red as "required actuator state failed").
+        needs_light = checks["exposure"]["state"] != "green"
+        who = ": " + ", ".join(failed) if failed else ""
+        put("lights", "red" if needs_light else "unknown",
+            "light readback failed" + who + ("; face needs light" if needs_light else "") + " (Refresh to retry)")
     else:
-        put("lights", "red" if lights == "failed" else "unknown", "required actuator state " + str(lights))
+        put("lights", "unknown", "required actuator state " + str(lights))
     state = next((s for s in ("red", "unknown", "yellow") if any(c["state"] == s for c in checks.values())), "green")
     if scene.get("trigger") == "auto" and count == 0 and checks["camera"]["state"] == "green":
         state = "idle"

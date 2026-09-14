@@ -503,7 +503,9 @@ final class AppState {
         if let r = scene.photometry["red_balance"], let g = scene.photometry["green_balance"], let b = scene.photometry["blue_balance"] {
             payload["rgb_balance"] = [r, g, b]
         }
-        let rows = ["overhead-left", "overhead-right", "cafe", "pie", "curtain-left", "curtain-right"].map { room.devices[$0] }
+        let ids = ["overhead-left", "overhead-right", "cafe", "pie", "curtain-left", "curtain-right"]
+        let rows = ids.map { room.devices[$0] }
+        payload["actuator_failed"] = ids.filter { room.devices[$0]?.failed == true }
         payload["actuator_status"] = rows.contains { $0?.failed == true } ? "failed" :
             rows.allSatisfy { $0?.observation != nil && $0?.pending == nil && $0?.observedAt != nil } ? "confirmed" : "unknown"
         payload["actuators_at"] = rows.compactMap { $0?.observedAt?.timeIntervalSince1970 }.min()

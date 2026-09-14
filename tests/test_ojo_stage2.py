@@ -443,3 +443,12 @@ def test_engine_face_detector_failure_is_an_error_not_no_face(monkeypatch, tmp_p
     monkeypatch.setattr(scene_repair, "DETECTOR_INTERPRETERS", ("/nonexistent/python3",))
     with pytest.raises(ValueError, match="Face detector unavailable"):
         scene_repair.detect_faces_strict(tmp_path / "ojo.py", tmp_path / "frame.jpg", time.time() + 5)
+
+
+def test_failed_light_readback_is_unknown_and_names_the_bulb():
+    result = assess(scene(actuator_status="failed", actuator_failed=["overhead-right"]))
+    assert result["checks"]["lights"] == {"state": "unknown", "reason": "light readback failed: overhead-right (Refresh to retry)"}
+    assert result["state"] == "unknown"
+    assert assess(scene(actuator_status="failed"))["checks"]["lights"]["reason"] == "light readback failed (Refresh to retry)"
+    dark = assess(scene(actuator_status="failed", actuator_failed=["overhead-right"], face_luma_mean=55))
+    assert dark["checks"]["lights"] == {"state": "red", "reason": "light readback failed: overhead-right; face needs light (Refresh to retry)"}
