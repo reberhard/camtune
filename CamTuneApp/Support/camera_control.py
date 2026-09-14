@@ -55,10 +55,23 @@ def validate_setting(control, value, ranges, settings):
         raise ValueError("Pan/tilt requires validated zoom headroom")
 
 
+def pan_tilt_limits(calibration, zoom):
+    """Measured [[pan_min,pan_max,step],[tilt_min,tilt_max,step]] for this zoom.
+
+    The Brio's pan/tilt is a digital crop that exists only above zoom 100; a
+    'default' row covers every zoom above 100 once measured (2026-09-14).
+    """
+    table = calibration.get("pan_tilt_by_zoom") or {}
+    limits = table.get(str(zoom))
+    if limits is None and type(zoom) is int and zoom > 100:
+        limits = table.get("default")
+    return limits
+
+
 def calibrated_ranges(ranges, calibration, zoom):
     """A receipt may narrow device limits, never extend them."""
     result = dict(ranges)
-    limits = calibration.get("pan_tilt_by_zoom", {}).get(str(zoom))
+    limits = pan_tilt_limits(calibration, zoom)
     raw = ranges.get("absolute_pan_tilt", {})
     if limits:
         if not (len(limits) == 2 and all(len(row) == 3 and all(type(v) is int for v in row)

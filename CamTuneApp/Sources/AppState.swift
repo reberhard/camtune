@@ -141,10 +141,16 @@ final class AppState {
               let receipt = try? JSONSerialization.jsonObject(with:data) as? [String:Any],
               receipt["camera_id"] as? String == "camera:\(device.vendor):\(device.product)",
               receipt["call_preview_parity"] as? Bool == true,
-              receipt["stage1_accepted"] as? Bool == true,
               !(receipt["validation_receipt"] as? String ?? "").isEmpty,
               let limits = receipt["pan_tilt_by_zoom"] as? [String:Any] else { return false }
-        return limits[String(zoom)] != nil
+        // Digital pan/tilt exists only above zoom 100; "default" is the measured row for any such zoom.
+        return limits[String(zoom)] != nil || (zoom > 100 && limits["default"] != nil)
+    }
+    var canPrepareScene: Bool {
+        guard let device = currentDevice, let data = try? Data(contentsOf:stage2ValidationURL),
+              let receipt = try? JSONSerialization.jsonObject(with:data) as? [String:Any] else { return false }
+        return receipt["room_effects_verified"] as? Bool == true && receipt["stage1_accepted"] as? Bool == true
+            && receipt["camera_id"] as? String == "camera:\(device.vendor):\(device.product)"
     }
     var readinessSummary: String {
         guard let checked = preCallLastChecked, Date().timeIntervalSince(checked) >= 0,
@@ -489,7 +495,8 @@ final class AppState {
         payload["measured_at"] = scene.measuredAt.timeIntervalSince1970
         payload["camera_id"] = scene.cameraID
         if let data = try? Data(contentsOf:stage2ValidationURL), let receipt = try? JSONSerialization.jsonObject(with:data) as? [String:Any] {
-            payload["camera_validated"] = receipt["camera_id"] as? String == scene.cameraID && receipt["call_preview_parity"] as? Bool == true && receipt["stage1_accepted"] as? Bool == true && !(receipt["validation_receipt"] as? String ?? "").isEmpty
+            let calibrated = ["face_x_per_pan", "face_y_per_tilt", "face_height_per_zoom"].allSatisfy { ((receipt[$0] as? NSNumber)?.doubleValue ?? 0) != 0 }
+            payload["camera_validated"] = receipt["camera_id"] as? String == scene.cameraID && receipt["call_preview_parity"] as? Bool == true && !(receipt["validation_receipt"] as? String ?? "").isEmpty && calibrated && (receipt["pan_tilt_by_zoom"] as? [String:Any])?.isEmpty == false
         } else { payload["camera_validated"] = false }
         payload["face_count"] = scene.faceCount
         if let box = scene.faceBox { payload["face_box"] = [box.minX, box.minY, box.width, box.height] }

@@ -1133,12 +1133,17 @@ def _percentile(values, pct):
 
 
 def _bbox_to_pixels(bbox, img_w, img_h):
+    """Vision lower-left box -> PIL (left, top, right, bottom), clipped to the image.
+
+    Found live 2026-09-14: an unclipped box hanging below the frame made PIL
+    pad the crop with black, which read as 86% shadow clipping on the face.
+    """
     x_n, y_n, w_n, h_n = bbox
-    x_px = int(max(0, x_n * img_w))
-    w_px = int(min(img_w - x_px, w_n * img_w))
-    h_px = int(min(img_h, h_n * img_h))
-    y_top = int(max(0, img_h - (y_n * img_h) - h_px))
-    return (x_px, y_top, x_px + w_px, y_top + h_px)
+    left = max(0, min(img_w, int(x_n * img_w)))
+    right = max(left, min(img_w, int((x_n + w_n) * img_w)))
+    top = max(0, min(img_h, int(img_h - (y_n + h_n) * img_h)))
+    bottom = max(top, min(img_h, int(img_h - y_n * img_h)))
+    return (left, top, right, bottom)
 
 
 def _mean_luma(pixels):
@@ -1314,9 +1319,16 @@ def describe_scene(image_path, face_bboxes, light_status=None, profile_path=DEFA
 
     light_status = light_status or {}
     img = Image.open(image_path).convert("RGB")
+    # Photometry is statistical; a quarter-resolution frame keeps the pure-
+    # Python pixel loop well inside the 2 s freshness window (1920x1080 took
+    # ~0.8 s on 2026-09-14). Normalized boxes are resolution-independent.
+    if img.width > 960:
+        img = img.reduce(max(1, img.width // 480))
     img_w, img_h = img.size
     face_bbox = detect_largest_bbox(face_bboxes)
     face_pixels_box = _bbox_to_pixels(face_bbox, img_w, img_h) if face_bbox else None
+    if face_pixels_box and (face_pixels_box[2] - face_pixels_box[0] < 2 or face_pixels_box[3] - face_pixels_box[1] < 2):
+        face_pixels_box = None  # no usable face pixels inside the frame
     region = img.crop(face_pixels_box) if face_pixels_box else img
     pixels = list(region.getdata())
     if not pixels:

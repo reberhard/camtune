@@ -123,7 +123,7 @@ struct CameraControlsView: View {
                 compositionControls
                     .disabled(!state.canAdjustComposition)
                 if !state.canAdjustComposition {
-                    Text("Pan/tilt unavailable until this zoom's direction, limits and step size are validated")
+                    Text("Pan/tilt needs zoom above 100 and a measured camera calibration receipt")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
 
@@ -131,7 +131,7 @@ struct CameraControlsView: View {
                     Task { await state.applyFramingRecommendation() }
                 }
                 .disabled(state.currentDevice == nil || state.isChecking)
-                .help("Requires office direction, zoom-limit and call-preview validation before any movement")
+                .help("Moves the camera only with a measured calibration receipt; bounded, re-measured, rolled back if worse")
 
                 Toggle("Allow this scene to adjust room controls", isOn: $state.allowSceneRoomChanges)
                     .font(.caption)
