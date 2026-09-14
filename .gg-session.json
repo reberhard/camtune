@@ -11,6 +11,7 @@
   "worktree": "/Users/eberhard/gg-worktrees/camtune/20260914-114839-13c9",
   "base": "8e02da1524def13197229cf2d186f1fd313f5cc5",
   "created_at": "2026-09-14T17:48:41+00:00",
-  "status": "active",
-  "agent": ""
+  "status": "released",
+  "agent": "",
+  "released_at": "2026-09-14T17:48:47+00:00"
 }
