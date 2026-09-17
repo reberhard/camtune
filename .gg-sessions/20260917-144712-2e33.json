@@ -1,0 +1,17 @@
+{
+  "schema": "gg-session-lease.v1",
+  "branch": "session/gg-mini/20260917-144712-2e33/scene-contract-lights-freshness-race",
+  "repo": "camtune",
+  "host": "gg-mini",
+  "session_id": "20260917-144712-2e33",
+  "purpose": "scene-contract-lights-freshness-race",
+  "paths": [
+    "CamTuneApp/Support/scene_contract.py",
+    "tests/test_ojo_stage2.py"
+  ],
+  "worktree": "/Users/eberhard/gg-worktrees/camtune/20260917-144712-2e33",
+  "base": "212453b76ad45013d2fe015a3069734b24c7ebc7",
+  "created_at": "2026-09-17T20:47:13+00:00",
+  "status": "active",
+  "agent": ""
+}
