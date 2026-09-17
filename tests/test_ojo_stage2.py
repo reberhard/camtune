@@ -445,6 +445,20 @@ def test_engine_face_detector_failure_is_an_error_not_no_face(monkeypatch, tmp_p
         scene_repair.detect_faces_strict(tmp_path / "ojo.py", tmp_path / "frame.jpg", time.time() + 5)
 
 
+def test_confirmed_lights_survive_normal_pipeline_latency():
+    # Found live 2026-09-15/16: actuators_at is stamped before camera capture
+    # and Vision detection (ojo.py run_pre_call_check), so `now` at assessment
+    # time is the end of the whole check, not readback time. A 10s window let
+    # a fully current, confirmed readback read "unknown" purely because a
+    # normal check (elapsed_ms often 10-13s) took a bit longer than usual.
+    now = time.time()
+    result = assess(scene(actuator_status="confirmed", actuators_at=now - 12, measured_at=now), now=now)
+    assert result["checks"]["lights"] == {"state": "green", "reason": "required actuator readback confirmed"}
+    # Genuine staleness (well past any realistic pipeline latency) still blocks.
+    stale = assess(scene(actuator_status="confirmed", actuators_at=now - 120, measured_at=now), now=now)
+    assert stale["checks"]["lights"]["state"] == "unknown"
+
+
 def test_failed_light_readback_is_unknown_and_names_the_bulb():
     result = assess(scene(actuator_status="failed", actuator_failed=["overhead-right"]))
     assert result["checks"]["lights"] == {"state": "unknown", "reason": "light readback failed: overhead-right (Refresh to retry)"}

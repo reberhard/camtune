@@ -129,7 +129,16 @@ def assess(scene, now=None):
     lights = scene.get("actuator_status", "unknown")
     failed = scene.get("actuator_failed")
     failed = [str(d) for d in failed] if isinstance(failed, list) else []
-    if lights == "confirmed" and fresh(scene.get("actuators_at"), now, 10):
+    # room_readback() runs before camera capture and Vision face detection
+    # (ojo.py run_pre_call_check), and `now` here is assessment time at the
+    # end of that pipeline, not readback time. A fully current, confirmed
+    # readback can measure >10s "stale" purely from the rest of a normal
+    # check's own latency (elapsed_ms routinely 10-13s; found live, real
+    # checks on 2026-09-15/16 read "unknown"/"required actuator state
+    # confirmed" for this reason with nothing actually wrong). 30s covers
+    # observed pipeline latency with margin; genuine staleness (a readback
+    # reused from a much older run) is still orders of magnitude past this.
+    if lights == "confirmed" and fresh(scene.get("actuators_at"), now, 30):
         put("lights", "green", "required actuator readback confirmed")
     elif lights == "failed":
         # A bulb we could not read is missing evidence. It is a blocker only
