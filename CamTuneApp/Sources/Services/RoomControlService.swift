@@ -44,6 +44,8 @@ final class RoomControlService {
         "all": ["overhead-left", "overhead-right", "cafe", "pie"]]
     static let curtainGroups = ["left": ["curtain-left"], "right": ["curtain-right"],
         "both": ["curtain-left", "curtain-right"]]
+    static let deviceNames = ["overhead-left": "Left overhead", "overhead-right": "Right overhead",
+        "cafe": "Café lamp", "pie": "Floor lamp", "curtain-left": "Left curtain", "curtain-right": "Right curtain"]
     var devices: [String: RoomDevice] = [:]
     var isRefreshing = false
     var intentGeneration = 0
@@ -94,7 +96,16 @@ final class RoomControlService {
 
     func errors(_ target: String, curtains: Bool = false) -> [String] {
         members(target, curtains: curtains).compactMap { id in
-            devices[id]?.error.map { "\(id): \($0)" }
+            devices[id]?.error.map { raw in
+                // ojo_controls.py's failure_label() writes "ClassName: plain
+                // description" for the journal; show only the plain half —
+                // the class name is for operations.jsonl, not for Ryan.
+                // Found live 2026-09-16: "pie: KasaException: ..." in the UI.
+                let plain = raw.split(separator: ":", maxSplits: 1).last
+                    .map { $0.trimmingCharacters(in: .whitespaces) } ?? raw
+                let name = Self.deviceNames[id] ?? id
+                return "\(name): \(plain.isEmpty ? "couldn't confirm the change, try Refresh" : plain)"
+            }
         }
     }
 

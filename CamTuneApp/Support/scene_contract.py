@@ -303,9 +303,47 @@ def camera_validated(camera_id, path=None):
         return False
 
 
+EVENTS_PATH = Path.home() / ".config/camtune/events.jsonl"
+
+
+def log_event(payload):
+    """Append a pre_call_check row for the live-preview Check path.
+
+    ojo.py's own run_pre_call_check writes to events.jsonl itself, but the
+    Swift live-preview path (AppState.applyLivePreviewCheck) calls this
+    module directly and never touches ojo.py, so a Check click taken with
+    the preview open logged nothing. Found live 2026-09-14; mirrors
+    ojo.py's _log_event field shape so both paths produce comparable rows.
+    """
+    scene = payload.get("scene") or {}
+    event = {
+        "ts": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "event_type": "pre_call_check",
+        "trigger": payload.get("trigger", "manual"),
+        "state": payload.get("state"),
+        "reason": payload.get("reason"),
+        "camera_detected": bool(scene.get("camera_id")),
+        "face_detected": scene.get("face_count") == 1,
+        "profile_applied": False,
+        "ai_tune_run": False,
+        "scene": scene,
+        "checks": payload.get("checks"),
+        "quality": payload.get("quality"),
+        "profile_status": payload.get("profile_status"),
+        "elapsed_ms": payload.get("elapsed_ms", 0),
+    }
+    try:
+        EVENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(EVENTS_PATH, "a") as f:
+            f.write(json.dumps(event, allow_nan=False) + "\n")
+    except OSError:
+        pass  # Telemetry is best-effort; a logging failure must not block the check.
+    return {"logged": True}
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["assess", "profile-select", "profile-save", "call"])
+    parser.add_argument("command", choices=["assess", "profile-select", "profile-save", "call", "log-event"])
     parser.add_argument("payload")
     args = parser.parse_args()
     payload = json.loads(args.payload)
@@ -315,6 +353,8 @@ def main():
         result = call_activity(payload)
     elif args.command == "profile-select":
         result = ProfileStore().select(payload)
+    elif args.command == "log-event":
+        result = log_event(payload)
     else:
         result = ProfileStore().save(payload["scene"], payload["settings"])
     print(json.dumps(result, allow_nan=False))

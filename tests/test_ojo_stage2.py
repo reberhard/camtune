@@ -9,7 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "CamTuneApp/Support"))
-from scene_contract import assess, bucket, call_activity, ProfileStore, room_readback
+from scene_contract import assess, bucket, call_activity, log_event, ProfileStore, room_readback
 from scene_repair import fix_framing, framing_plan, lighting_plan, prepare_scene, cancel_operation, run_physical_framing
 from camera_control import execute, validate_setting
 from lib.ojo_controls import IntentStore
@@ -443,6 +443,26 @@ def test_engine_face_detector_failure_is_an_error_not_no_face(monkeypatch, tmp_p
     monkeypatch.setattr(scene_repair, "DETECTOR_INTERPRETERS", ("/nonexistent/python3",))
     with pytest.raises(ValueError, match="Face detector unavailable"):
         scene_repair.detect_faces_strict(tmp_path / "ojo.py", tmp_path / "frame.jpg", time.time() + 5)
+
+
+def test_log_event_writes_a_pre_call_check_row(monkeypatch, tmp_path):
+    # Found live 2026-09-14: Check with the preview open (AppState's
+    # live-preview path) never wrote to events.jsonl at all, because it
+    # calls scene_contract.py directly and never touches ojo.py's own
+    # _log_event. This is the plain receipt fix for that gap.
+    import scene_contract
+    events_path = tmp_path / "events.jsonl"
+    monkeypatch.setattr(scene_contract, "EVENTS_PATH", events_path)
+    result = log_event({"trigger": "manual", "state": "yellow", "reason": "mild white-balance issue",
+                         "scene": {"camera_id": "camera:1:2", "face_count": 1}, "checks": {}, "quality": {}})
+    assert result == {"logged": True}
+    rows = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == "pre_call_check"
+    assert rows[0]["trigger"] == "manual"
+    assert rows[0]["state"] == "yellow"
+    assert rows[0]["camera_detected"] is True
+    assert rows[0]["face_detected"] is True
 
 
 def test_confirmed_lights_survive_normal_pipeline_latency():

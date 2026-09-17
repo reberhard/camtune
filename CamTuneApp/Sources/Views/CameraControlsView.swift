@@ -123,15 +123,15 @@ struct CameraControlsView: View {
                 compositionControls
                     .disabled(!state.canAdjustComposition)
                 if !state.canAdjustComposition {
-                    Text("Pan/tilt needs zoom above 100 and a measured camera calibration receipt")
+                    Text("Pan/tilt needs more zoom, or isn't calibrated for this camera yet")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
 
-                Button("Fix Framing — measured") {
+                Button("Fix Framing") {
                     Task { await state.applyFramingRecommendation() }
                 }
                 .disabled(state.currentDevice == nil || state.isChecking)
-                .help("Moves the camera only with a measured calibration receipt; bounded, re-measured, rolled back if worse")
+                .help("Moves the camera in small, checked steps and undoes itself if the result looks worse")
 
                 Toggle("Allow this scene to adjust room controls", isOn: $state.allowSceneRoomChanges)
                     .font(.caption)
