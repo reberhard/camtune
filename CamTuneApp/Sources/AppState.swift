@@ -152,10 +152,33 @@ final class AppState {
         return receipt["room_effects_verified"] as? Bool == true && receipt["stage1_accepted"] as? Bool == true
             && receipt["camera_id"] as? String == "camera:\(device.vendor):\(device.product)"
     }
+    /// Translates scene_contract.py's precise check-reason strings (kept
+    /// verbatim in events.jsonl and operations.jsonl for the record) into
+    /// plain language for the popover. Ryan, 2026-09-14 10:02 AM: "I don't
+    /// want to see 'actuator' messages... I want a really clean UX."
+    /// Unmapped strings pass through unchanged rather than risk
+    /// mistranslating one we haven't seen yet.
+    static let plainReasons: [String: String] = [
+        "camera identity missing": "Camera not identified yet",
+        "camera frame stale": "Camera frame is outdated — checking again",
+        "camera calibration receipt missing or mismatched": "Camera isn't calibrated for this check yet",
+        "one face rectangle overlapping the frame required": "Can't tell where your face is in frame",
+        "face exposure measurements unavailable": "Can't read the lighting on your face yet",
+        "color measurements unavailable": "Can't read color balance yet",
+        "background measurements unavailable": "Can't read the background yet",
+        "profile missing": "No saved profile for this time of day yet",
+        "profile stale": "Saved profile is from earlier — may not match now",
+        "profile incompatible": "Saved profile doesn't match this setup",
+        "required actuator state unknown": "Lights haven't been checked yet",
+        "required actuator state confirmed": "Lights look fine",
+        "face detection unavailable": "Can't detect a face right now",
+    ]
+    static func plainLanguage(_ reason: String) -> String { plainReasons[reason] ?? reason }
+
     var readinessSummary: String {
         guard let checked = preCallLastChecked, Date().timeIntervalSince(checked) >= 0,
               Date().timeIntervalSince(checked) <= 2 else { return "Scene readiness not verified — fresh check required" }
-        return preCallState == "green" ? "Scene ready — all required checks passed" : "Scene \(preCallState ?? "unknown") — \(preCallReason ?? "not verified")"
+        return preCallState == "green" ? "Scene ready — all required checks passed" : "Scene \(preCallState ?? "unknown") — \(Self.plainLanguage(preCallReason ?? "not verified"))"
     }
     private var lastCallActivity: CallActivity?
     private var lastCallObservedAt: Date?
@@ -482,6 +505,14 @@ final class AppState {
                 preCallQualityIssue = preCallQualityIssues.first
                 preCallBlockingIssue = preCallState == "red" ? preCallReason : nil
                 // Device errors are owned by their writer, never cleared here.
+                // Found live 2026-09-14: this path calls scene_contract.py
+                // directly and never touches ojo.py's own event logging, so a
+                // Check click with the preview open wrote no receipt at all.
+                let eventPayload: [String: Any] = [
+                    "scene": payload, "state": result["state"] as Any, "reason": result["reason"] as Any,
+                    "checks": result["checks"] as Any, "quality": quality as Any, "trigger": "manual",
+                ]
+                Task { _ = try? await SceneContractService.call("log-event", payload: eventPayload) }
             } catch {
                 guard assessmentGeneration == generation else { return }
                 preCallState = "unknown"
@@ -584,7 +615,7 @@ final class AppState {
               receipt["call_preview_parity"] as? Bool == true,
               receipt["stage1_accepted"] as? Bool == true,
               !(receipt["validation_receipt"] as? String ?? "").isEmpty else {
-            error = "Scene preparation requires the deferred office controls and room-effect validation."; return
+            error = "Make Me Look Good isn't set up for this room yet."; return
         }
         cameraGeneration += 1
         let generation = cameraGeneration
@@ -1115,7 +1146,7 @@ final class AppState {
         guard let device = currentDevice, !isChecking else { return }
         let validation = stage2ValidationURL
         guard FileManager.default.fileExists(atPath: validation.path) else {
-            error = "Framing repair awaits office camera-direction and call-preview validation."; return
+            error = "Camera framing isn't calibrated yet."; return
         }
         cameraGeneration += 1
         let generation = cameraGeneration

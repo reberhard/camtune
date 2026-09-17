@@ -11,7 +11,8 @@
     "CamTuneApp/Sources/Views/MenuContentView.swift",
     "CamTuneApp/Sources/Views/CameraControlsView.swift",
     "CamTuneApp/Sources/Services/RoomControlService.swift",
-    "tests/test_ojo_stage2.py"
+    "tests/test_ojo_stage2.py",
+    "CamTuneApp/Tests/CameraControlTests.swift"
   ],
   "worktree": "/Users/eberhard/gg-worktrees/camtune/20260917-145137-053e",
   "base": "1fe639a73ab88a47786c61e2098976e3c2f9ef72",

@@ -8,18 +8,18 @@ struct MenuContentView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
+                    // readinessSummary already carries the reason inline
+                    // ("Scene yellow — ..."); a second line repeating it was
+                    // exactly the clutter Ryan flagged 2026-09-14.
                     Text(state.readinessSummary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    if let reason = state.preCallReason {
-                        Text(reason).font(.caption).foregroundStyle(.secondary)
-                    }
                     if !state.canAdjustComposition {
-                        Text("Framing awaits a measured camera calibration receipt")
+                        Text("Pan/tilt needs more zoom, or isn't calibrated for this camera yet")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     if !state.canPrepareScene {
-                        Text("Scene preparation awaits room-effect validation")
+                        Text("Make Me Look Good isn't set up for this room yet")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     HStack {
@@ -331,10 +331,10 @@ private struct ReadinessView: View {
 
     private var message: String {
         if let issue = state.preCallQualityIssue {
-            return issue
+            return AppState.plainLanguage(issue)
         }
         if let reason = state.preCallReason {
-            return reason
+            return AppState.plainLanguage(reason)
         }
         return "Ojo will check framing, lighting, and camera settings before your call."
     }
