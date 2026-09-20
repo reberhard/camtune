@@ -4,9 +4,11 @@ struct BasicLightsView: View {
     @Bindable var room: RoomControlService
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // Ryan, 2026-09-14 10:02 AM: "a really clean UX with bigger controls."
+        // Bumped from .small/.caption2 to .regular/.subheadline-.caption.
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Power and brightness").font(.caption)
+                Text("Power and brightness").font(.subheadline)
                 Spacer()
                 Button("Refresh") { room.refresh() }
                     .disabled(room.isRefreshing)
@@ -15,9 +17,9 @@ struct BasicLightsView: View {
             ForEach(["overheads", "cafe", "pie"], id: \.self) { target in
                 BasicLightRow(room: room, target: target)
             }
-            VStack(alignment: .leading) {
-                Text("Scenes — set power and color").font(.caption2)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 95))]) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Scenes — set power and color").font(.caption)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 110))]) {
                     ForEach(LightService.scenes) { scene in
                         Button(scene.name) { room.light(scene.id, target: scene.id == "reading" ? "pie" : "all") }
                             .accessibilityIdentifier("scene-\(scene.id)")
@@ -26,7 +28,7 @@ struct BasicLightsView: View {
             }
         }
         .buttonStyle(.bordered)
-        .controlSize(.small)
+        .controlSize(.regular)
     }
 }
 
@@ -40,11 +42,11 @@ private struct BasicLightRow: View {
     private var enabled: Bool { room.summary(target) == "On" || room.summary(target) == "Adjusting…" }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text(name).font(.caption).fontWeight(.medium)
+                Text(name).font(.subheadline).fontWeight(.medium)
                 Spacer()
-                Text(room.summary(target)).font(.caption2)
+                Text(room.summary(target)).font(.caption)
                     .accessibilityIdentifier("\(target)-status")
                 Button("On") { room.light("on", target: target) }
                     .accessibilityIdentifier("\(target)-on")
@@ -57,14 +59,14 @@ private struct BasicLightRow: View {
                     .accessibilityIdentifier("\(target)-brightness")
                     .disabled(!enabled)
                     .onChange(of: level) { _, _ in adjust() }
-                Text(room.brightness(target).map { "\($0)%" } ?? "—").font(.caption2)
+                Text(room.brightness(target).map { "\($0)%" } ?? "—").font(.caption).frame(width: 36, alignment: .trailing)
             }
             DisclosureGroup("Color") {
                 Slider(value: $hue, in: 0...360, step: 1).accessibilityLabel("\(name) hue")
                     .onChange(of: hue) { _, _ in adjust() }
                 Slider(value: $saturation, in: 0...100, step: 1).accessibilityLabel("\(name) saturation")
                     .onChange(of: saturation) { _, _ in adjust() }
-            }.font(.caption2).disabled(!enabled)
+            }.font(.caption).disabled(!enabled)
             ForEach(room.errors(target), id: \.self) { message in
                 Text(message).font(.caption2).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
@@ -98,13 +100,13 @@ struct BasicCurtainsView: View {
     @Bindable var room: RoomControlService
     @State private var target = "both"
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Picker("Curtain", selection: $target) {
                 Text("Left").tag("left")
                 Text("Right").tag("right")
                 Text("Both").tag("both")
             }.pickerStyle(.segmented)
-            Text(room.summary(target, curtains: true)).font(.caption)
+            Text(room.summary(target, curtains: true)).font(.subheadline)
                 .accessibilityIdentifier("curtain-status")
             HStack {
                 Button("Open") { room.curtain("open", target: target) }
@@ -121,11 +123,11 @@ struct BasicCurtainsView: View {
                 }
             }
             ForEach(room.errors(target, curtains: true), id: \.self) { message in
-                Text(message).font(.caption2).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                Text(message).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
             if !room.errors(target, curtains: true).isEmpty {
                 Button("Dismiss error") { room.dismiss(target, curtains: true) }
             }
-        }.buttonStyle(.bordered).controlSize(.small)
+        }.buttonStyle(.bordered).controlSize(.regular)
     }
 }

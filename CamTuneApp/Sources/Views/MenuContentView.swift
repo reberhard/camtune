@@ -34,14 +34,14 @@ struct MenuContentView: View {
                     // buried once I click on it."
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Lights")
-                            .font(.caption)
+                            .font(.headline)
                             .foregroundStyle(.secondary)
                         BasicLightsView(room: state.room)
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Curtains")
-                            .font(.caption)
+                            .font(.headline)
                             .foregroundStyle(.secondary)
                         BasicCurtainsView(room: state.room)
                     }
