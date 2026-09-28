@@ -286,7 +286,8 @@ def room_readback(runner=None, timeout=19):
             return {"actuator_status":"failed"}
         if any(r.get("status") != "confirmed" or not r.get("observed") or not finite(r.get("observed_at")) for r in rows):
             return {"actuator_status":"unknown"}
-        return {"actuator_status":"confirmed", "actuators_at":min(r["observed_at"] for r in rows)}
+        return {"actuator_status":"confirmed", "actuators_at":min(r["observed_at"] for r in rows),
+                "room_states": {r["device"]: r["observed"] for r in rows}}
     except (ValueError, KeyError, TypeError, OSError, subprocess.TimeoutExpired):
         return {"actuator_status":"unknown"}
 

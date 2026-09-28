@@ -21,7 +21,7 @@ import Testing
     try await preparedState { state in
         #expect(state.canPrepareScene)
         #expect(!state.roomPreparationAvailable)
-        #expect(state.preparationScope.contains("Camera framing only"))
+        #expect(state.preparationScope.contains("Camera framing and exposure"))
         var commands: [String] = []
         var checks = 0
         state.error = "old error"
@@ -32,10 +32,10 @@ import Testing
         }
         state.preparationRecheck = { checks += 1 }
         await state.meetingReadyNow()
-        #expect(commands == ["frame"])
+        #expect(commands == ["camera-prepare"])
         #expect(checks == 1)
         #expect(state.error == nil)
-        #expect(state.statusMessage?.contains("already balanced") == true)
+        #expect(state.statusMessage?.contains("framing and exposure checked") == true)
         #expect(!state.isChecking)
         #expect(state.activePreparationID == nil)
     }

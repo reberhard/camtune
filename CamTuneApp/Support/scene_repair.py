@@ -204,12 +204,111 @@ def fix_framing(io, calibration, current=lambda: True, clock=time.time):
             return {"status": "rollback_failed", "reason": str(restore_error), "original_error": str(exc)}
 
 
+def fix_exposure(io, calibration, current=lambda: True, clock=time.time):
+    """Small measured brightness corrections; never alter auto-exposure modes.
+
+    Brightness proposals are bounded to 24 UVC units from the baseline. The
+    physical writer checks actual supported ranges before any write. Every trial
+    must improve distance to target without worsening color, clipping, framing
+    or background; otherwise restore the original brightness with readback.
+    """
+    deadline = clock() + 25
+    baseline = None
+    attempted = False
+    try:
+        if not current():
+            raise Cancelled()
+        baseline = io.read(deadline)
+        before = io.frame(0, deadline)
+        checks = guard_frame(before, calibration["camera_id"], 0, clock())
+        if checks["exposure"]["state"] == "green":
+            return {"status": "unchanged", "reason": "exposure already acceptable", "observed": baseline}
+        if type(baseline.get("brightness")) is not int:
+            raise ValueError("Camera brightness control unavailable")
+        settings, scene = baseline, before
+        rank = {"green":0, "yellow":1, "red":2, "unknown":3}
+        for count in range(1, 4):
+            if not current():
+                raise Cancelled()
+            target = max(0, min(255, settings["brightness"] + (-8 if scene["face_luma_mean"] > 125 else 8)))
+            if target == settings["brightness"]:
+                raise ValueError("No brightness correction inside supported bounds")
+            attempted = True
+            settings = io.write({"brightness": target}, deadline)
+            if settings.get("brightness") != target:
+                raise ValueError("Brightness readback mismatch")
+            after_time = clock()
+            after = io.frame(after_time, deadline)
+            final = guard_frame(after, calibration["camera_id"], after_time, clock())
+            if clock() >= deadline:
+                raise TimeoutError("Exposure correction budget exceeded")
+            if any(rank[final[k]["state"]] > rank[checks[k]["state"]] for k in ("exposure", "white_balance", "background")):
+                raise ValueError("Brightness correction worsened scene")
+            if framing_error(after) > framing_error(before) + .01:
+                raise ValueError("Subject moved during exposure correction")
+            if abs(125-after["face_luma_mean"]) >= abs(125-scene["face_luma_mean"]) - 1:
+                raise ValueError("Brightness correction did not measurably improve exposure")
+            if final["exposure"]["state"] == "green":
+                if not current():
+                    raise Cancelled()
+                return {"status":"improved", "corrections":count, "baseline":baseline,
+                        "observed":settings, "before_luma":before["face_luma_mean"],
+                        "after_luma":after["face_luma_mean"]}
+            scene = after
+        raise ValueError("Exposure remains outside accepted limits after three corrections")
+    except Exception as exc:
+        if not current() or isinstance(exc, Cancelled):
+            return {"status":"cancelled", "reason":"Newer manual intent; no stale rollback"}
+        if baseline is None or not attempted:
+            return {"status":"could_not_verify", "reason":str(exc)}
+        try:
+            restored = io.write({"brightness":baseline["brightness"]}, clock()+5)
+            if restored.get("brightness") != baseline["brightness"]:
+                raise ValueError("Brightness restoration not confirmed")
+            return {"status":"worse_or_unverified_restored", "reason":str(exc), "observed":restored}
+        except Exception as restore_error:
+            return {"status":"rollback_failed", "reason":str(restore_error), "original_error":str(exc)}
+
+
+def prepare_camera(io, calibration, current=lambda: True, clock=time.time):
+    framing = fix_framing(io, calibration, current, clock)
+    if framing["status"] not in ("improved", "unchanged"):
+        return framing
+    exposure = fix_exposure(io, calibration, current, clock)
+    if exposure["status"] not in ("improved", "unchanged"):
+        return dict(exposure, framing=framing)
+    return {"status":"improved" if "improved" in (framing["status"], exposure["status"]) else "unchanged",
+            "reason":"Camera framing and exposure checked; room controls unchanged",
+            "framing":framing, "exposure":exposure, "observed":exposure["observed"],
+            **({"baseline":framing["baseline"]} if "baseline" in framing else {})}
+
+
+def accept_verified_profile(io, result, store, current=lambda: True, clock=time.time):
+    """A failed save cannot erase the record of an already verified correction."""
+    try:
+        deadline = clock() + 20
+        scene = io.frame(0, deadline)
+        assessment = assess(scene, clock())
+        if not current():
+            raise Cancelled("Profile save superseded by manual intent")
+        result["assessment"] = assessment
+        if all(c["state"] == "green" for k,c in assessment["checks"].items() if k != "profile"):
+            settings = io.read(deadline)
+            if not current():
+                raise Cancelled("Profile save superseded by manual intent")
+            store.save(scene, settings, now=clock())
+            result["profile_saved"] = True
+    except Exception as exc:
+        result["profile_error"] = str(exc)
+    return result
+
+
 def lighting_plan(scene, responses, manual_overrides, *, curtains_validated=False):
     """Use only measured per-device effects. No hardcoded preset-as-repair."""
     face = scene.get("face_luma_mean")
     if not finite(face) or scene.get("face_count") != 1:
         return {"status": "could_not_verify", "reason": "fresh face exposure required", "changes": []}
-    if 85 <= face <= 165:
+    if assess(scene)["checks"]["exposure"]["state"] == "green":
         return {"status": "unchanged", "changes": []}
     candidates = []
     for response in responses:
@@ -220,6 +319,12 @@ def lighting_plan(scene, responses, manual_overrides, *, curtains_validated=Fals
             continue
         if response.get("camera_id") != scene.get("camera_id"):
             continue
+        if "baseline_device" in response and response["baseline_device"] != scene.get("room_states", {}).get(device):
+            continue
+        if "baseline_camera" in response:
+            from room_calibration import stable_camera
+            if response["baseline_camera"] != stable_camera(scene.get("camera_settings", {})):
+                continue
         if not finite(response.get("ambient")) or abs(response["ambient"] - scene.get("background_luma_mean", -1000)) > 20:
             continue
         effect = response.get("face_luma_delta")
@@ -354,7 +459,7 @@ def run_physical_framing(payload, mode="frame", *, validation_path=None, intent_
     if (calibration.get("camera_id") != identity or not calibration.get("call_preview_parity")
             or not calibration.get("validation_receipt")):
         return {"status":"could_not_verify", "reason":"Camera-matched calibration receipt is incomplete"}
-    if mode != "frame" and not calibration.get("stage1_accepted"):
+    if mode not in ("frame", "camera-prepare") and not calibration.get("stage1_accepted"):
         return {"status":"could_not_verify", "reason":"Room preparation requires Stage 1 acceptance in the receipt"}
     # A manual request is stamped before any subprocess; never refresh its
     # timestamp when a later step executes.
@@ -435,6 +540,7 @@ def run_physical_framing(payload, mode="frame", *, validation_path=None, intent_
             evidence = room_readback(timeout=min(19,remaining))
             result = super().frame(after, deadline)
             result.update(evidence)
+            result["camera_settings"] = self.read(deadline)
             result["profile_status"] = ProfileStore().select(result)["status"]
             return result
 
@@ -524,7 +630,18 @@ def run_physical_framing(payload, mode="frame", *, validation_path=None, intent_
             return {"status":"confirmed"}
 
     with store.lock(identity,time.monotonic()+5,current):
-        if mode == "frame":
+        if mode == "calibrate-light":
+            from room_calibration import measure_light
+            result = measure_light(io_factory() if io_factory else PhysicalRoom(), calibration,
+                                   payload.get("device"), payload.get("brightness"), current)
+        elif mode == "camera-prepare":
+            result = prepare_camera(io_factory() if io_factory else PhysicalCamera(),calibration,current)
+            if result["status"] in ("improved", "unchanged") and payload.get("save_verified_profile") is True:
+                # A camera result is not a whole-scene acceptance. Re-measure
+                # room + image and save only when every non-profile check passes.
+                result = accept_verified_profile(io_factory() if io_factory else PhysicalRoom(),
+                                                 result, ProfileStore(), current)
+        elif mode == "frame":
             result = fix_framing(io_factory() if io_factory else PhysicalCamera(),calibration,current)
         else:
             if payload.get("response_id") is not None:
@@ -545,7 +662,7 @@ def main():
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: _shutdown.set())
     parser = argparse.ArgumentParser()
-    parser.add_argument("command",choices=["frame","prepare","cancel"])
+    parser.add_argument("command",choices=["frame","camera-prepare","prepare","calibrate-light","cancel"])
     parser.add_argument("payload")
     args = parser.parse_args()
     try:

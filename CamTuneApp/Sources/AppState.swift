@@ -162,8 +162,8 @@ final class AppState {
     var canPrepareScene: Bool { allowSceneRoomChanges ? roomPreparationAvailable : cameraPreparationAvailable }
     var preparationScope: String {
         if !cameraPreparationAvailable { return "Camera calibration is required before automatic correction" }
-        if !roomPreparationAvailable { return "Camera framing only — automatic lighting still needs room calibration" }
-        return allowSceneRoomChanges ? "Camera and measured room adjustments enabled" : "Camera framing only — lights and curtains stay as you set them"
+        if !roomPreparationAvailable { return "Camera framing and exposure — automatic lighting still needs room calibration" }
+        return allowSceneRoomChanges ? "Camera and measured room adjustments enabled" : "Camera framing and exposure — lights and curtains stay as you set them"
     }
 
     // Tests inject the transaction and recheck; no real device writes in fixtures.
@@ -171,7 +171,7 @@ final class AppState {
         let input = try JSONSerialization.data(withJSONObject: payload)
         let output = try await ShellRunner.run(executablePath: "/opt/homebrew/bin/python3",
             arguments: [SceneContractService.supportDirectory.appendingPathComponent("scene_repair.py").path,
-                        command, String(decoding: input, as: UTF8.self)], timeout: .seconds(45))
+                        command, String(decoding: input, as: UTF8.self)], timeout: .seconds(command == "camera-prepare" ? 75 : 45))
         guard let result = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any] else {
             throw CocoaError(.fileReadCorruptFile)
         }
@@ -664,7 +664,7 @@ final class AppState {
         // Room measurements must gate room writes, not the independently
         // calibrated camera-only path selected by the default (off) toggle.
         if !ai && !allowSceneRoomChanges {
-            await applyFramingRecommendation()
+            await applyFramingRecommendation(includeExposure: true)
             return
         }
         let validation = stage2ValidationURL
@@ -1201,7 +1201,7 @@ final class AppState {
         } catch { Diagnostics.shared.failure(error, action: #function); self.error = "Cancellation not confirmed: " + error.localizedDescription }
     }
 
-    func applyFramingRecommendation(recheck: Bool = true) async {
+    func applyFramingRecommendation(recheck: Bool = true, includeExposure: Bool = false) async {
         guard let device = currentDevice, !isChecking else { return }
         guard cameraPreparationAvailable else {
             error = "Camera framing isn't calibrated yet."; return
@@ -1212,17 +1212,18 @@ final class AppState {
         let operation = UUID()
         activePreparationID = operation
         let payload: [String: Any] = ["vendor":device.vendor,"product":device.product,"camera_name":device.name,
+            "save_verified_profile": includeExposure,
             "operation_id":operation.uuidString,"issued":Int64(Date().timeIntervalSince1970 * 1_000_000_000)]
         isChecking = true
-        statusMessage = "Measuring framing and preparing rollback…"
+        statusMessage = includeExposure ? "Checking camera framing and exposure…" : "Measuring framing and preparing rollback…"
         defer {
             if activePreparationID == operation { activePreparationID = nil; isChecking = false }
         }
         do {
-            let result = try await sceneRepair("frame", payload)
+            let result = try await sceneRepair(includeExposure ? "camera-prepare" : "frame", payload)
             guard cameraGeneration == generation else { return }
             guard let status = result["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }
-            Diagnostics.shared.record("framing_result", status, context: ["operation": operation.uuidString,
+            Diagnostics.shared.record(includeExposure ? "camera_preparation_result" : "framing_result", status, context: ["operation": operation.uuidString,
                 "reason": result["reason"] as? String ?? "", "camera": "camera:\(device.vendor):\(device.product)"])
             if status == "improved" || status == "unchanged" {
                 if status == "improved", let baseline = result["baseline"] as? [String:Any] {
@@ -1231,19 +1232,26 @@ final class AppState {
                 if let observed = result["observed"] as? [String:Any] {
                     currentSettings = try JSONDecoder().decode(UVCSettings.self,from:JSONSerialization.data(withJSONObject:observed))
                 }
+                if result["profile_saved"] as? Bool == true { savedProfileExists = true }
                 isChecking = false
                 if recheck {
                     if let preparationRecheck { await preparationRecheck() } else { await checkNow() }
                     guard cameraGeneration == generation else { return }
                 }
+                if let profileError = result["profile_error"] as? String {
+                    error = "Camera correction finished, but profile verification failed: " + profileError
+                    statusMessage = nil
+                }
                 if error == nil {
-                    statusMessage = status == "improved"
+                    statusMessage = includeExposure
+                        ? "Camera framing and exposure checked. Lights and curtains unchanged; see scene check for remaining issues."
+                        : status == "improved"
                         ? "Framing improved. Lights and curtains unchanged; see scene check for remaining issues."
                         : "Framing already balanced. Lights and curtains unchanged; see scene check for remaining issues."
                 }
             } else {
                 statusMessage = nil
-                self.error = "Framing \(status): \(result["reason"] as? String ?? "Not confirmed")"
+                self.error = "\(includeExposure ? "Camera preparation" : "Framing") \(status): \(result["reason"] as? String ?? "Not confirmed")"
             }
         } catch { Diagnostics.shared.failure(error, action: #function); self.error = "Framing not confirmed: " + error.localizedDescription; statusMessage = nil }
     }
