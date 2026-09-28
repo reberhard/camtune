@@ -178,6 +178,13 @@ final class AppState {
         return result
     }
     var preparationRecheck: (() async -> Void)?
+    var cameraAccess: () async -> Bool = {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: return true
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .video)
+        default: return false
+        }
+    }
     /// Translates scene_contract.py's precise check-reason strings (kept
     /// verbatim in events.jsonl and operations.jsonl for the record) into
     /// plain language for the popover. Ryan, 2026-09-14 10:02 AM: "I don't
@@ -465,6 +472,13 @@ final class AppState {
     private func performCheck(reason: String, allowCached: Bool) async {
         isChecking = true
         error = nil
+        statusMessage = "Checking camera permission…"
+        guard await cameraAccess() else {
+            error = "Camera access is off for Ojo. Enable it in System Settings → Privacy & Security → Camera."
+            statusMessage = nil
+            isChecking = false
+            return
+        }
         statusMessage = "Checking..."
         lastAutoCheckReason = reason == "manual" ? nil : reason
         let trigger = Self.manualCheckReasons.contains(reason) ? "manual" : "auto"
@@ -691,6 +705,10 @@ final class AppState {
         var payload: [String: Any] = ["vendor":device.vendor,"product":device.product,"camera_name":device.name,
             "operation_id":operation.uuidString,"issued":issued,"allow_room_changes":allowSceneRoomChanges]
         do {
+            guard await cameraAccess() else {
+                throw NSError(domain: "OjoCameraPermission", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                    "Camera access is off for Ojo. Enable it in System Settings → Privacy & Security → Camera."])
+            }
             if ai {
                 guard captureSession != nil else {
                     throw NSError(domain:"OjoScene",code:1,userInfo:[NSLocalizedDescriptionKey:"Open the camera preview before explicitly requesting AI Tune"])
@@ -1220,6 +1238,11 @@ final class AppState {
             if activePreparationID == operation { activePreparationID = nil; isChecking = false }
         }
         do {
+            guard await cameraAccess() else {
+                throw NSError(domain: "OjoCameraPermission", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                    "Camera access is off for Ojo. Enable it in System Settings → Privacy & Security → Camera."])
+            }
+            guard cameraGeneration == generation else { return }
             let result = try await sceneRepair(includeExposure ? "camera-prepare" : "frame", payload)
             guard cameraGeneration == generation else { return }
             guard let status = result["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }

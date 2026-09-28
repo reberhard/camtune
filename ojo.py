@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -839,14 +840,22 @@ def capture_frame(camera_name, path=CAPTURE_PATH, source="screen", warmup_secs=W
             return False
         print("No video call window found, falling back to camera capture...")
 
-    result = subprocess.run(
-        ["imagesnap", "-d", camera_name, "-w", str(warmup_secs), path],
-        capture_output=True, text=True, timeout=30,
-    )
-    if not os.path.exists(path):
-        print(f"Failed to capture frame: {result.stderr}", file=sys.stderr)
-        return False
-    return True
+    # Never accept a previous capture when the helper fails. Bound this child
+    # below the native caller's 30s budget so it can report the actual cause.
+    with tempfile.TemporaryDirectory(prefix="ojo-capture-", dir=os.path.dirname(os.path.abspath(path))) as directory:
+        fresh_path = os.path.join(directory, "frame.png")
+        try:
+            result = subprocess.run(
+                ["imagesnap", "-d", camera_name, "-w", str(warmup_secs), fresh_path],
+                capture_output=True, text=True, timeout=8,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Camera capture timed out after 8 seconds. Check Ojo camera permission or another camera app.") from exc
+        if result.returncode != 0 or not os.path.isfile(fresh_path) or os.path.getsize(fresh_path) == 0:
+            print(f"Failed to capture a fresh camera frame: {result.stderr}", file=sys.stderr)
+            return False
+        os.replace(fresh_path, path)
+        return True
 
 
 def get_current_settings(vendor, product):
@@ -1499,6 +1508,18 @@ def classify_scene(scene):
 
 
 def run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
+    # Each check owns its image until measurements finish; concurrent checks
+    # cannot overwrite each other's camera frames or retain private captures.
+    import copy
+    if getattr(args, "capture_path", None):
+        return _run_pre_call_check(args, camera_name, profile_path)
+    with tempfile.TemporaryDirectory(prefix="ojo-check-") as directory:
+        local_args = copy.copy(args)
+        local_args.capture_path = os.path.join(directory, "frame.png")
+        return _run_pre_call_check(local_args, camera_name, profile_path)
+
+
+def _run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
     start = time.time()
     env_config = load_env_config()
     if getattr(args, "skip_lights", False):

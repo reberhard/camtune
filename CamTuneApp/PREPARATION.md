@@ -22,6 +22,22 @@ preserved. Regression: test_profile_auto_controls.py.
 Profile rollback likewise restores only replayable controls the transaction changed;
 it does not attempt to write unrelated or automatically drifting sensor readings.
 
+## Camera permission and build identity
+
+The native app checks/requests camera authorization before starting helpers. A
+denial names the Camera privacy setting; it is not reported as a helper timeout.
+`bundle.sh` now signs with an existing stable code-signing identity: set
+OJO_SIGNING_IDENTITY, or exactly one Apple Development/Developer ID identity is
+selected. No ad-hoc fallback. Do not re-sign the output with `codesign --sign -`:
+that binds TCC consent to a changing binary hash and breaks permission on updates.
+Existing mini Apple Development identity is used; no new certificate or credential
+is created. Other hosts must provide/verify their own existing signing identity.
+
+Raw CLI captures have an8-second helper budget, validate exit status and nonempty
+fresh output, and atomically replace the requested image only after success.
+Each default check owns a private temporary image removed on success/failure.
+Regression: test_capture_freshness.py and native denied-permission tests.
+
 Calibration CLI: scene_repair.py calibrate-light with an explicit camera identity,
 operation UUID/original issued time, device and brightness. It runs one light A/B/A
 trial through the shared controller, restores the original state, and emits a
