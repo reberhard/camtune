@@ -22,13 +22,13 @@ struct CameraControlsView: View {
         ScrollView {
             VStack(spacing: 10) {
                 if !state.cameraControls.pending.isEmpty {
-                    Text("Camera change pending readback").font(.caption).foregroundStyle(.secondary)
+                    DiagnosticText("Camera change pending readback").font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(state.cameraControls.errors.keys.sorted(), id: \.self) { key in
-                    Text("\(key): \(state.cameraControls.errors[key] ?? "Not confirmed")")
+                    DiagnosticText("\(key): \(state.cameraControls.errors[key] ?? "Not confirmed")")
                         .font(.caption).foregroundStyle(.red)
                 }
-                if state.ranges.isEmpty { Text("Camera controls unavailable: no verified ranges").font(.caption) }
+                if state.ranges.isEmpty { DiagnosticText("Camera controls unavailable: no verified ranges").font(.caption) }
                 // Auto toggles
                 ForEach(Self.autoToggles, id: \.key) { control in
                     autoToggleRow(key: control.key, label: control.label, onValue: control.onValue)
@@ -41,11 +41,11 @@ struct CameraControlsView: View {
                     let currentValue = state.currentSettings.intValue(for: "white_balance_temperature") ?? 4000
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
-                            Text("Temperature")
+                            DiagnosticText("Temperature")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Spacer()
-                            Text("\(currentValue) K")
+                            DiagnosticText("\(currentValue) K")
                                 .font(.caption.monospacedDigit())
                                 .fontWeight(.medium)
                         }
@@ -76,11 +76,11 @@ struct CameraControlsView: View {
                     let currentValue = state.currentSettings.intValue(for: "exposure_time_absolute") ?? 300
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
-                            Text("Exposure Time")
+                            DiagnosticText("Exposure Time")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Spacer()
-                            Text("\(currentValue)")
+                            DiagnosticText("\(currentValue)")
                                 .font(.caption.monospacedDigit())
                                 .fontWeight(.medium)
                         }
@@ -99,7 +99,7 @@ struct CameraControlsView: View {
 
                 // FoV presets
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Field of View — degree presets uncalibrated")
+                    DiagnosticText("Field of View — degree presets uncalibrated")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     HStack(spacing: 4) {
@@ -123,7 +123,7 @@ struct CameraControlsView: View {
                 compositionControls
                     .disabled(!state.canAdjustComposition)
                 if !state.canAdjustComposition {
-                    Text("Pan/tilt needs more zoom, or isn't calibrated for this camera yet")
+                    DiagnosticText("Pan/tilt needs more zoom, or isn't calibrated for this camera yet")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
 
@@ -146,7 +146,7 @@ struct CameraControlsView: View {
                     Button("Cancel preparation") { Task { await state.cancelPreparation() } }
                 }
                 ForEach(Array(state.preparationOutcomes.enumerated()), id: \.offset) { _, outcome in
-                    Text("Preparation step — " + outcome).font(.caption).foregroundStyle(.secondary)
+                    DiagnosticText("Preparation step — " + outcome).font(.caption).foregroundStyle(.secondary)
                 }
 
                 Divider()
@@ -182,11 +182,11 @@ struct CameraControlsView: View {
     private var compositionControls: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Composition")
+                DiagnosticText("Composition")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(state.panTiltText) / \(state.zoomText)")
+                DiagnosticText("\(state.panTiltText) / \(state.zoomText)")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -195,9 +195,9 @@ struct CameraControlsView: View {
                 get: { state.compositionStep },
                 set: { state.setCompositionStep($0) }
             )) {
-                Text("Small").tag(1800)
-                Text("Medium").tag(3600)
-                Text("Large").tag(7200)
+                DiagnosticText("Small").tag(1800)
+                DiagnosticText("Medium").tag(3600)
+                DiagnosticText("Large").tag(7200)
             }
             .pickerStyle(.segmented)
             .controlSize(.small)
@@ -295,7 +295,7 @@ struct CameraControlsView: View {
                 Task { await state.setUVCControl(key, value: setValue) }
             }
         )) {
-            Text(label)
+            DiagnosticText(label)
                 .font(.caption)
         }
         .toggleStyle(.switch)
@@ -307,11 +307,11 @@ struct CameraControlsView: View {
         let currentValue = state.currentSettings.intValue(for: key) ?? range.min
         return VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text(label)
+                DiagnosticText(label)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(currentValue)")
+                DiagnosticText("\(currentValue)")
                     .font(.caption.monospacedDigit())
                     .fontWeight(.medium)
             }

@@ -221,7 +221,13 @@ final class AppState {
     var browserAutomationStatus = "Browser automation untested"
     var lightControlAvailable = false
     var daemonStatus: DaemonStatus = .unknown
-    var error: String?
+    var error: String? {
+        didSet {
+            if let error {
+                Diagnostics.shared.record("app_error", error, context: ["source": "AppState.error"])
+            }
+        }
+    }
     var statusMessage: String?
     var lightingPlanSummary: String?
     var selectedTab: OjoTab = .status
@@ -314,7 +320,7 @@ final class AppState {
             currentSettings = try await UVCService.exportSettings(
                 vendor: device.vendor, product: device.product)
             // Camera session is NOT started here. It starts when the popover opens.
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
         }
     }
@@ -336,7 +342,7 @@ final class AppState {
                 freshnessTask?.cancel()
                 freshnessTask = Task { [weak self] in
                     while !Task.isCancelled {
-                        do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                        do { try await Task.sleep(for: .seconds(1)) } catch { Diagnostics.shared.failure(error, action: #function); return }
                         guard let self else { return }
                         if self.freshLiveScene == nil {
                             self.assessmentGeneration = UUID()
@@ -349,7 +355,7 @@ final class AppState {
             } else {
                 throw CameraCaptureService.CaptureError.setupFailed("The selected UVC camera could not be matched uniquely to a preview device")
             }
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
         }
     }
@@ -479,7 +485,7 @@ final class AppState {
             preCallBlockingIssue = state == "red" ? preCallReason : nil
             maybeSendCallGuardNotification(reason: reason, state: state)
             statusMessage = nil
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             preCallState = "red"
             preCallReason = error.localizedDescription
             preCallBlockingIssue = error.localizedDescription
@@ -531,11 +537,11 @@ final class AppState {
                     ]
                     do {
                         _ = try await sceneContract("log-event", eventPayload)
-                    } catch {
+                    } catch { Diagnostics.shared.failure(error, action: #function);
                         self.error = "Check completed, but its record could not be saved: " + error.localizedDescription
                     }
                 }
-            } catch {
+            } catch { Diagnostics.shared.failure(error, action: #function);
                 guard assessmentGeneration == generation else { return }
                 preCallState = "unknown"
                 preCallReason = "Assessment unavailable: " + error.localizedDescription
@@ -565,7 +571,7 @@ final class AppState {
         do {
             let profile = try await sceneContract("profile-select", payload)
             payload["profile_status"] = profile["status"] as? String ?? "unknown"
-        } catch { payload["profile_status"] = "unknown" }
+        } catch { Diagnostics.shared.failure(error, action: #function); payload["profile_status"] = "unknown" }
         return payload
     }
 
@@ -611,7 +617,7 @@ final class AppState {
             currentSettings = try await UVCService.exportSettings(
                 vendor: device.vendor, product: device.product)
             statusMessage = nil
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
             statusMessage = nil
         }
@@ -700,7 +706,7 @@ final class AppState {
                 statusMessage = nil
             }
             room.refresh()
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = "Preparation not confirmed: " + error.localizedDescription
             statusMessage = nil
         }
@@ -738,7 +744,7 @@ final class AppState {
             statusMessage = kind == "bad" ? "Marked bad" : "Comment logged"
             try? await Task.sleep(for: .seconds(2))
             statusMessage = nil
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
         }
     }
@@ -756,7 +762,7 @@ final class AppState {
                 "scene": payload, "settings": try JSONSerialization.jsonObject(with: encoded)])
             savedProfileExists = true
             statusMessage = "Accepted profile saved"
-        } catch { self.error = "Profile not saved: " + error.localizedDescription }
+        } catch { Diagnostics.shared.failure(error, action: #function); self.error = "Profile not saved: " + error.localizedDescription }
     }
 
     func restoreProfile() async {
@@ -781,7 +787,7 @@ final class AppState {
             guard cameraGeneration == generation else { return }
             statusMessage = "Profile camera settings confirmed; scene improvement not yet verified"
             if let fresh = freshLiveScene { applyLivePreviewCheck(fresh) }
-        } catch { self.error = "Profile restoration not confirmed: " + error.localizedDescription }
+        } catch { Diagnostics.shared.failure(error, action: #function); self.error = "Profile restoration not confirmed: " + error.localizedDescription }
     }
 
     func refreshSettings() async {
@@ -789,7 +795,7 @@ final class AppState {
         do {
             currentSettings = try await UVCService.exportSettings(
                 vendor: device.vendor, product: device.product)
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
         }
     }
@@ -951,14 +957,14 @@ final class AppState {
             saved.observationInterrupted = true
             activeCallSession = saved
             detectedCallApp = saved.app
-        } catch { callActivityReason = "Previous call observation could not be recovered: " + error.localizedDescription }
+        } catch { Diagnostics.shared.failure(error, action: #function); callActivityReason = "Previous call observation could not be recovered: " + error.localizedDescription }
     }
 
     private func persistCallObservation() {
         guard let session = activeCallSession else { return }
         do {
             try JSONEncoder().encode(session).write(to:activeCallObservationPath,options:.atomic)
-        } catch { callActivityReason = "Call observation not saved: " + error.localizedDescription }
+        } catch { Diagnostics.shared.failure(error, action: #function); callActivityReason = "Call observation not saved: " + error.localizedDescription }
     }
 
     /// Queue durably before releasing the observed session. Failed publication
@@ -992,7 +998,7 @@ final class AppState {
                 try FileManager.default.removeItem(at:activeCallObservationPath)
             }
             await flushCallRollups()
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             // Retain the session for a retry if durable enqueue itself failed.
             activeCallSession = session
             persistCallObservation()
@@ -1061,7 +1067,7 @@ final class AppState {
             let result = String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return result == "yes"
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             return false
         }
     }
@@ -1086,7 +1092,7 @@ final class AppState {
                 let data = stderr.fileHandleForReading.readDataToEndOfFile()
                 let message = String(data: data, encoding: .utf8) ?? "blocked"
                 return "\(appName) automation blocked: \(message.prefix(80))"
-            } catch {
+            } catch { Diagnostics.shared.failure(error, action: #function);
                 return "\(appName) automation unavailable"
             }
         }
@@ -1145,7 +1151,7 @@ final class AppState {
             currentSettings = observed
             compositionUndo = nil
             lastComposition = nil
-        } catch { self.error = "Undo not confirmed: " + error.localizedDescription }
+        } catch { Diagnostics.shared.failure(error, action: #function); self.error = "Undo not confirmed: " + error.localizedDescription }
     }
 
     func setCompositionStep(_ value: Int) { compositionStep = value }
@@ -1164,7 +1170,7 @@ final class AppState {
                 arguments:[SceneContractService.supportDirectory.appendingPathComponent("scene_repair.py").path,
                            "cancel",String(decoding:input,as:UTF8.self)],timeout:.seconds(8))
             room.refresh()
-        } catch { self.error = "Cancellation not confirmed: " + error.localizedDescription }
+        } catch { Diagnostics.shared.failure(error, action: #function); self.error = "Cancellation not confirmed: " + error.localizedDescription }
     }
 
     func applyFramingRecommendation(recheck: Bool = true) async {
@@ -1200,7 +1206,7 @@ final class AppState {
                 statusMessage = nil
                 self.error = "Framing \(status): \(result["reason"] as? String ?? "Not confirmed")"
             }
-        } catch { self.error = "Framing not confirmed: " + error.localizedDescription; statusMessage = nil }
+        } catch { Diagnostics.shared.failure(error, action: #function); self.error = "Framing not confirmed: " + error.localizedDescription; statusMessage = nil }
     }
 
     private var hasFramingFix: Bool {
@@ -1251,7 +1257,7 @@ final class AppState {
             }
             try? await Task.sleep(for: .seconds(1))
             statusMessage = nil
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
             statusMessage = nil
         }
@@ -1271,7 +1277,7 @@ final class AppState {
             try await LightService.setCustomHSV(hue: 35, saturation: 4, brightness: 50, target: "pie")
             lightingPlanSummary = "Balanced video baseline: soft warm key light, practical key, neutral fill."
             statusMessage = "Video lights ready"
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
             statusMessage = nil
         }
@@ -1318,7 +1324,7 @@ final class AppState {
             }
             try? await Task.sleep(for: .seconds(1))
             statusMessage = nil
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
             statusMessage = nil
         }
@@ -1439,7 +1445,7 @@ final class AppState {
             statusMessage = "Scene: \(sceneId)"
             try? await Task.sleep(for: .seconds(1))
             statusMessage = nil
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
         }
     }
@@ -1451,7 +1457,7 @@ final class AppState {
         do {
             let status = try await CurtainService.status(target: "both")
             curtainStatusByTarget = status
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
         }
     }
@@ -1480,7 +1486,7 @@ final class AppState {
         self.statusMessage = statusMessage
         do {
             try await action()
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
         }
         await refreshCurtainStatus()
@@ -1498,7 +1504,7 @@ final class AppState {
         do {
             try await LightService.setCustomHSV(
                 hue: h, saturation: s, brightness: b, target: target)
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
         }
     }
@@ -1512,7 +1518,7 @@ final class AppState {
         }
         do {
             try await LightService.turnOff(target: lightFixtures[index].target)
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
             lightFixtures[index].isOn = true
         }
@@ -1522,12 +1528,12 @@ final class AppState {
 
     func tvPlayPause() async {
         do { try await TVService.playPause() }
-        catch { self.error = error.localizedDescription }
+        catch { Diagnostics.shared.failure(error, action: #function); self.error = error.localizedDescription }
     }
 
     func tvNext() async {
         do { try await TVService.next() }
-        catch { self.error = error.localizedDescription }
+        catch { Diagnostics.shared.failure(error, action: #function); self.error = error.localizedDescription }
     }
 
     func startConcert() async {
@@ -1535,7 +1541,7 @@ final class AppState {
         do {
             try await TVService.startConcertSeries()
             statusMessage = nil
-        } catch {
+        } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
             statusMessage = nil
         }
@@ -1543,17 +1549,17 @@ final class AppState {
 
     func setAudioRoute(_ route: AudioRoute) async {
         do { try await TVService.setAudioRoute(route) }
-        catch { self.error = error.localizedDescription }
+        catch { Diagnostics.shared.failure(error, action: #function); self.error = error.localizedDescription }
     }
 
     func tvSleep() async {
         do { try await TVService.sleep() }
-        catch { self.error = error.localizedDescription }
+        catch { Diagnostics.shared.failure(error, action: #function); self.error = error.localizedDescription }
     }
 
     func tvWake() async {
         do { try await TVService.wake() }
-        catch { self.error = error.localizedDescription }
+        catch { Diagnostics.shared.failure(error, action: #function); self.error = error.localizedDescription }
     }
 
     // MARK: - Private

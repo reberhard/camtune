@@ -10,11 +10,11 @@ struct OptimizationProgressView: View {
             ProgressView()
                 .controlSize(.small)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Round \(round)/\(total)")
+                DiagnosticText("Round \(round)/\(total)")
                     .font(.caption)
                     .fontWeight(.medium)
                 if let message {
-                    Text(message)
+                    DiagnosticText(message)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

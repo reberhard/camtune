@@ -11,15 +11,15 @@ struct MenuContentView: View {
                     // readinessSummary already carries the reason inline
                     // ("Scene yellow — ..."); a second line repeating it was
                     // exactly the clutter Ryan flagged 2026-09-14.
-                    Text(state.readinessSummary)
+                    DiagnosticText(state.readinessSummary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if !state.canAdjustComposition {
-                        Text("Pan/tilt needs more zoom, or isn't calibrated for this camera yet")
+                        DiagnosticText("Pan/tilt needs more zoom, or isn't calibrated for this camera yet")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     if !state.canPrepareScene {
-                        Text("Make Me Look Good isn't set up for this room yet")
+                        DiagnosticText("Make Me Look Good isn't set up for this room yet")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     HStack {
@@ -33,14 +33,14 @@ struct MenuContentView: View {
                     // able to easily control my lights and curtains... not
                     // buried once I click on it."
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Lights")
+                        DiagnosticText("Lights")
                             .font(.headline)
                             .foregroundStyle(.secondary)
                         BasicLightsView(room: state.room)
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Curtains")
+                        DiagnosticText("Curtains")
                             .font(.headline)
                             .foregroundStyle(.secondary)
                         BasicCurtainsView(room: state.room)
@@ -61,7 +61,7 @@ struct MenuContentView: View {
             .frame(maxHeight: .infinity, alignment: .top)
 
             if let error = state.error {
-                Text(error)
+                DiagnosticText(error)
                     .font(.caption2)
                     .foregroundStyle(.red)
                     .lineLimit(2)
@@ -70,7 +70,7 @@ struct MenuContentView: View {
             }
 
             if let msg = state.statusMessage, !state.isOptimizing {
-                Text(msg)
+                DiagnosticText(msg)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 14)
@@ -81,7 +81,7 @@ struct MenuContentView: View {
 
             HStack {
                 Toggle(isOn: $state.autoCheckEnabled) {
-                    Text(AppState.observeChecksEnabled ? "Auto-check (observe only)" : "Auto-check awaits call validation")
+                    DiagnosticText(AppState.observeChecksEnabled ? "Auto-check (observe only)" : "Auto-check awaits call validation")
                         .font(.system(size: 10))
                 }
                 .toggleStyle(.switch)
@@ -184,7 +184,7 @@ private struct QuickFramingControlsView: View {
                     .font(.caption)
                     .fontWeight(.medium)
                 Spacer()
-                Text("Small steps · Undo available")
+                DiagnosticText("Small steps · Undo available")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -274,10 +274,10 @@ private struct PreviewUnavailableView: View {
             Image(systemName: systemImage)
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            Text(title)
+            DiagnosticText(title)
                 .font(.caption)
                 .fontWeight(.semibold)
-            Text(message)
+            DiagnosticText(message)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -296,7 +296,7 @@ private struct ReadinessView: View {
                 Circle()
                     .fill(statusColor)
                     .frame(width: 10, height: 10)
-                Text(title)
+                DiagnosticText(title)
                     .font(.title3)
                     .fontWeight(.semibold)
                 Spacer()
@@ -307,13 +307,13 @@ private struct ReadinessView: View {
                 }
             }
 
-            Text(message)
+            DiagnosticText(message)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
 
             if let score = state.preCallQualityScore, let label = state.preCallQualityLabel {
-                Text("\(label.capitalized) \(score)")
+                DiagnosticText("\(label.capitalized) \(score)")
                     .font(.caption2)
                     .foregroundStyle(score >= 88 ? .green : .secondary)
             }
@@ -392,7 +392,7 @@ private struct PrimaryActionsView: View {
             }
 
             if let summary = state.lightingPlanSummary {
-                Text(summary)
+                DiagnosticText(summary)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -491,10 +491,10 @@ private struct FineTuneView: View {
             .padding(.top, 8)
         } label: {
             HStack {
-                Text("Camera & More")
+                DiagnosticText("Camera & More")
                     .font(.headline)
                 Spacer()
-                Text("\(state.panTiltText) · \(state.zoomText)")
+                DiagnosticText("\(state.panTiltText) · \(state.zoomText)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -526,13 +526,13 @@ private struct AdvancedView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(state.notificationStatus)
+            DiagnosticText(state.notificationStatus)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            Text(state.browserAutomationStatus)
+            DiagnosticText(state.browserAutomationStatus)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            Text(state.callActivityReason)
+            DiagnosticText(state.callActivityReason)
                 .font(.caption2).foregroundStyle(.secondary)
 
             HStack {
@@ -654,7 +654,7 @@ private struct CompositionOverlayView: View {
     }
 
     private func hintLabel(_ text: String) -> some View {
-        Text(text)
+        DiagnosticText(text)
             .font(.caption2)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
@@ -696,9 +696,9 @@ private struct SceneQualityPillsView: View {
             Circle()
                 .fill(color(for: good))
                 .frame(width: 6, height: 6)
-            Text(label)
+            DiagnosticText(label)
                 .foregroundStyle(.secondary)
-            Text(value)
+            DiagnosticText(value)
                 .fontWeight(.medium)
         }
         .font(.system(size: 10))

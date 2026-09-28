@@ -30,7 +30,7 @@ struct CurtainsControlView: View {
         VStack(spacing: 8) {
             Picker("", selection: $selectedTarget) {
                 ForEach(targets, id: \.id) { t in
-                    Text(t.label).tag(t.id)
+                    DiagnosticText(t.label).tag(t.id)
                 }
             }
             .pickerStyle(.segmented)
@@ -78,11 +78,11 @@ struct CurtainsControlView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         } else if let summary = positionSummary {
-            Text(summary)
+            DiagnosticText(summary)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         } else {
-            Text("Position unknown")
+            DiagnosticText("Position unknown")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }

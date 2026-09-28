@@ -102,6 +102,14 @@ enum ShellRunner {
             process.standardInput = stdin
         }
 
+        let operation = UUID().uuidString
+        // Never persist stdin, JSON payloads, prompts, or arbitrary argv.
+        let context = ["operation": operation, "executable": executableURL.path,
+                       "command": arguments.first.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "",
+                       "subcommand": arguments.dropFirst().first.flatMap {
+                           $0.range(of: #"^[a-zA-Z][a-zA-Z-]{0,40}$"#, options: .regularExpression) != nil ? $0 : nil
+                       } ?? ""]
+        do {
         try process.run()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
@@ -136,6 +144,10 @@ enum ShellRunner {
             return out
         } onCancel: {
             stop(process)
+        }
+        } catch {
+            Diagnostics.shared.failure(error, action: "subprocess", context: context)
+            throw error
         }
     }
 }
