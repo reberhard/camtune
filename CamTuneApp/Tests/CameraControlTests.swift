@@ -107,7 +107,7 @@ private actor CameraCalls {
     state.currentDevice = testCamera
     state.stage2ValidationURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     await state.meetingReadyNow()
-    #expect(state.error?.contains("isn't set up") == true)
+    #expect(state.error?.contains("isn't calibrated") == true)
     #expect(!state.isMeetingReadyRunning)
     await state.deepRepairNow()
     #expect(state.activePreparationID == nil)

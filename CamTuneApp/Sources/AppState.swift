@@ -146,12 +146,38 @@ final class AppState {
         // Digital pan/tilt exists only above zoom 100; "default" is the measured row for any such zoom.
         return limits[String(zoom)] != nil || (zoom > 100 && limits["default"] != nil)
     }
-    var canPrepareScene: Bool {
+    var cameraPreparationAvailable: Bool {
         guard let device = currentDevice, let data = try? Data(contentsOf:stage2ValidationURL),
               let receipt = try? JSONSerialization.jsonObject(with:data) as? [String:Any] else { return false }
-        return receipt["room_effects_verified"] as? Bool == true && receipt["stage1_accepted"] as? Bool == true
+        return receipt["call_preview_parity"] as? Bool == true
+            && !(receipt["validation_receipt"] as? String ?? "").isEmpty
             && receipt["camera_id"] as? String == "camera:\(device.vendor):\(device.product)"
     }
+    var roomPreparationAvailable: Bool {
+        guard cameraPreparationAvailable, let data = try? Data(contentsOf:stage2ValidationURL),
+              let receipt = try? JSONSerialization.jsonObject(with:data) as? [String:Any] else { return false }
+        return receipt["room_effects_verified"] as? Bool == true && receipt["stage1_accepted"] as? Bool == true
+            && !(receipt["responses"] as? [[String:Any]] ?? []).isEmpty
+    }
+    var canPrepareScene: Bool { allowSceneRoomChanges ? roomPreparationAvailable : cameraPreparationAvailable }
+    var preparationScope: String {
+        if !cameraPreparationAvailable { return "Camera calibration is required before automatic correction" }
+        if !roomPreparationAvailable { return "Camera framing only — automatic lighting still needs room calibration" }
+        return allowSceneRoomChanges ? "Camera and measured room adjustments enabled" : "Camera framing only — lights and curtains stay as you set them"
+    }
+
+    // Tests inject the transaction and recheck; no real device writes in fixtures.
+    var sceneRepair: (String, [String: Any]) async throws -> [String: Any] = { command, payload in
+        let input = try JSONSerialization.data(withJSONObject: payload)
+        let output = try await ShellRunner.run(executablePath: "/opt/homebrew/bin/python3",
+            arguments: [SceneContractService.supportDirectory.appendingPathComponent("scene_repair.py").path,
+                        command, String(decoding: input, as: UTF8.self)], timeout: .seconds(45))
+        guard let result = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any] else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return result
+    }
+    var preparationRecheck: (() async -> Void)?
     /// Translates scene_contract.py's precise check-reason strings (kept
     /// verbatim in events.jsonl and operations.jsonl for the record) into
     /// plain language for the popover. Ryan, 2026-09-14 10:02 AM: "I don't
@@ -635,15 +661,21 @@ final class AppState {
 
     private func prepareScene(ai: Bool) async {
         guard let device = currentDevice, !isChecking, !isCalibrating, !isDeepRepairing, !isMeetingReadyRunning else { return }
+        // Room measurements must gate room writes, not the independently
+        // calibrated camera-only path selected by the default (off) toggle.
+        if !ai && !allowSceneRoomChanges {
+            await applyFramingRecommendation()
+            return
+        }
         let validation = stage2ValidationURL
-        guard let data = try? Data(contentsOf: validation),
+        guard roomPreparationAvailable, let data = try? Data(contentsOf: validation),
               let receipt = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               receipt["room_effects_verified"] as? Bool == true,
               receipt["camera_id"] as? String == "camera:\(device.vendor):\(device.product)",
               receipt["call_preview_parity"] as? Bool == true,
               receipt["stage1_accepted"] as? Bool == true,
               !(receipt["validation_receipt"] as? String ?? "").isEmpty else {
-            error = "Make Me Look Good isn't set up for this room yet."; return
+            error = "Automatic lighting needs room calibration. Turn off room adjustments to correct camera framing only."; return
         }
         cameraGeneration += 1
         let generation = cameraGeneration
@@ -682,13 +714,9 @@ final class AppState {
                 return
             }
             statusMessage = "Preparing scene with device readback and image verification…"
-            let input = try JSONSerialization.data(withJSONObject:payload)
-            let output = try await ShellRunner.run(executablePath:"/opt/homebrew/bin/python3",
-                arguments:[SceneContractService.supportDirectory.appendingPathComponent("scene_repair.py").path,
-                           "prepare",String(decoding:input,as:UTF8.self)],timeout:.seconds(45))
+            let result = try await sceneRepair("prepare", payload)
             guard cameraGeneration == generation, room.intentGeneration == roomGeneration else { return }
-            guard let result = try JSONSerialization.jsonObject(with:Data(output.utf8)) as? [String:Any],
-                  let outcome = result["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }
+            guard let outcome = result["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }
             preparationOutcomes = (result["outcomes"] as? [[String:Any]] ?? []).map {
                 ($0["device"] as? String ?? "Device") + ": " + ($0["status"] as? String ?? "unknown")
                     + (($0["error"] as? String).map { " — " + $0 } ?? "")
@@ -1175,10 +1203,10 @@ final class AppState {
 
     func applyFramingRecommendation(recheck: Bool = true) async {
         guard let device = currentDevice, !isChecking else { return }
-        let validation = stage2ValidationURL
-        guard FileManager.default.fileExists(atPath: validation.path) else {
+        guard cameraPreparationAvailable else {
             error = "Camera framing isn't calibrated yet."; return
         }
+        error = nil
         cameraGeneration += 1
         let generation = cameraGeneration
         let operation = UUID()
@@ -1191,17 +1219,28 @@ final class AppState {
             if activePreparationID == operation { activePreparationID = nil; isChecking = false }
         }
         do {
-            let input = try JSONSerialization.data(withJSONObject: payload)
-            let output = try await ShellRunner.run(executablePath: "/opt/homebrew/bin/python3",
-                arguments: [SceneContractService.supportDirectory.appendingPathComponent("scene_repair.py").path,
-                            "frame",String(decoding:input,as:UTF8.self)], timeout:.seconds(30))
+            let result = try await sceneRepair("frame", payload)
             guard cameraGeneration == generation else { return }
-            guard let result = try JSONSerialization.jsonObject(with:Data(output.utf8)) as? [String:Any],
-                  let status = result["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }
-            if status == "improved", let baseline = result["baseline"] as? [String:Any] {
-                compositionUndo = try JSONDecoder().decode(UVCSettings.self,from:JSONSerialization.data(withJSONObject:baseline))
-                statusMessage = "Framing improvement measured; scene readiness still requires all checks"
-                await refreshSettings()
+            guard let status = result["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }
+            Diagnostics.shared.record("framing_result", status, context: ["operation": operation.uuidString,
+                "reason": result["reason"] as? String ?? "", "camera": "camera:\(device.vendor):\(device.product)"])
+            if status == "improved" || status == "unchanged" {
+                if status == "improved", let baseline = result["baseline"] as? [String:Any] {
+                    compositionUndo = try JSONDecoder().decode(UVCSettings.self,from:JSONSerialization.data(withJSONObject:baseline))
+                }
+                if let observed = result["observed"] as? [String:Any] {
+                    currentSettings = try JSONDecoder().decode(UVCSettings.self,from:JSONSerialization.data(withJSONObject:observed))
+                }
+                isChecking = false
+                if recheck {
+                    if let preparationRecheck { await preparationRecheck() } else { await checkNow() }
+                    guard cameraGeneration == generation else { return }
+                }
+                if error == nil {
+                    statusMessage = status == "improved"
+                        ? "Framing improved. Lights and curtains unchanged; see scene check for remaining issues."
+                        : "Framing already balanced. Lights and curtains unchanged; see scene check for remaining issues."
+                }
             } else {
                 statusMessage = nil
                 self.error = "Framing \(status): \(result["reason"] as? String ?? "Not confirmed")"

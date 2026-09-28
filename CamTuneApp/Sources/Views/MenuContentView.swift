@@ -18,13 +18,12 @@ struct MenuContentView: View {
                         DiagnosticText("Pan/tilt needs more zoom, or isn't calibrated for this camera yet")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
-                    if !state.canPrepareScene {
-                        DiagnosticText("Make Me Look Good isn't set up for this room yet")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
+                    DiagnosticText(state.preparationScope)
+                        .font(.caption2).foregroundStyle(.secondary)
                     HStack {
                         Button("Check") { Task { await state.checkNow() } }
                         Button("Make Me Look Good") { Task { await state.meetingReadyNow() } }
+                            .disabled(!state.canPrepareScene)
                     }
                     .disabled(state.isChecking || state.isMeetingReadyRunning)
 
