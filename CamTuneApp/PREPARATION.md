@@ -19,6 +19,8 @@ Accepted profiles store replayable commands, not auto-controlled gain, exposure,
 white-balance or focus readings. Selecting an older accepted profile applies the
 same filtering without rewriting the original file. Explicit manual settings are
 preserved. Regression: test_profile_auto_controls.py.
+Profile rollback likewise restores only replayable controls the transaction changed;
+it does not attempt to write unrelated or automatically drifting sensor readings.
 
 Calibration CLI: scene_repair.py calibrate-light with an explicit camera identity,
 operation UUID/original issued time, device and brightness. It runs one light A/B/A
