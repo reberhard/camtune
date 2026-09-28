@@ -135,10 +135,14 @@ struct CameraControlsView: View {
 
                 Toggle("Allow this scene to adjust room controls", isOn: $state.allowSceneRoomChanges)
                     .font(.caption)
+                    .disabled(!state.roomPreparationAvailable)
                     .help("Off preserves manual light and curtain choices; bulbs that are off remain off")
+                DiagnosticText(state.preparationScope).font(.caption2).foregroundStyle(.secondary)
                 HStack {
                     Button("Make Me Look Good") { Task { await state.meetingReadyNow() } }
+                        .disabled(!state.canPrepareScene)
                     Button("AI Tune") { Task { await state.deepRepairNow() } }
+                        .disabled(!state.roomPreparationAvailable)
                         .help("Explicitly sends one preview image to Claude to choose among validated room adjustments")
                 }
                 .disabled(state.isChecking || state.isMeetingReadyRunning || state.currentDevice == nil)
