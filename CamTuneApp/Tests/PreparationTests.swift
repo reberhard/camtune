@@ -14,6 +14,7 @@ import Testing
     state.stage2ValidationURL = file
     state.currentDevice = CameraDevice(name: "Fixture", vendor: 1133, product: 2329, address: nil)
     state.preparationRecheck = {}
+    state.cameraAccess = { true }
     try await body(state)
 }
 
@@ -98,4 +99,23 @@ import Testing
         #expect(state.error == "Check failed")
         #expect(state.statusMessage == nil)
     }
+}
+
+@MainActor @Test func deniedCameraPermissionDoesNotLaunchRepair() async throws {
+    try await preparedState { state in
+        state.cameraAccess = { false }
+        state.sceneRepair = { _,_ in Issue.record("Permission denial must not launch helper"); return [:] }
+        await state.meetingReadyNow()
+        #expect(state.error?.contains("Camera access is off") == true)
+        #expect(!state.isChecking)
+    }
+}
+
+@MainActor @Test func deniedCameraPermissionDoesNotLaunchCheck() async {
+    let state = AppState()
+    state.cameraAccess = { false }
+    await state.checkNow()
+    #expect(state.error?.contains("Camera access is off") == true)
+    #expect(!state.isChecking)
+    #expect(state.statusMessage == nil)
 }
