@@ -51,6 +51,7 @@ final class RoomControlService {
     var intentGeneration = 0
     private var debounces: [String: Task<Void, Never>] = [:]
     private var started = false
+    private var refreshTask: Task<Void, Never>?
 
     // Tests inject the transport; production always uses the same CLI contract.
     var transport: @Sendable (String, [String], Duration) async throws -> String = { script, args, timeout in
@@ -164,12 +165,18 @@ final class RoomControlService {
     func refresh() {
         guard !isRefreshing else { return }
         isRefreshing = true
-        Task {
+        refreshTask = Task {
             async let lights: Void = refreshGroup(curtains: false)
             async let curtains: Void = refreshGroup(curtains: true)
             _ = await (lights, curtains)
             isRefreshing = false
+            refreshTask = nil
         }
+    }
+
+    func refreshAndWait() async {
+        refresh()
+        await refreshTask?.value
     }
 
     private func refreshGroup(curtains: Bool) async {

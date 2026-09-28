@@ -44,6 +44,13 @@ def test_clean_and_stale_and_no_face_and_color():
     assert assess(scene(face_luma_mean=float("nan")))["state"] != "green"
 
 
+def test_old_confirmed_room_reading_is_named_stale_not_healthy():
+    result = assess(scene(actuators_at=time.time() - 60))
+    assert result["checks"]["lights"]["state"] == "unknown"
+    assert "stale" in result["checks"]["lights"]["reason"]
+    assert "check again" in result["checks"]["lights"]["reason"]
+
+
 def test_cli_and_shared_classifier_are_identical():
     spec = importlib.util.spec_from_file_location("stage2_ojo", ROOT / "ojo.py")
     ojo = importlib.util.module_from_spec(spec)

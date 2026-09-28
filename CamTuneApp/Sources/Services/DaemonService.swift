@@ -35,8 +35,10 @@ enum DaemonService {
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         process.arguments = ["list", label]
         let pipe = Pipe()
+        let stderr = Pipe()
+        defer { ShellRunner.closePipes(pipe, stderr) }
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        process.standardError = stderr
 
         do {
             try process.run()
