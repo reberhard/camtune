@@ -97,9 +97,11 @@ enum ClaudeVisionService {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         process.arguments = ["claude"]
         let pipe = Pipe()
+        let stderr = Pipe()
+        defer { ShellRunner.closePipes(pipe, stderr) }
         process.standardOutput = pipe
-        process.standardError = Pipe()
-        try? process.run()
+        process.standardError = stderr
+        do { try process.run() } catch { return nil }
         process.waitUntilExit()
         let result = String(
             data: pipe.fileHandleForReading.readDataToEndOfFile(),

@@ -140,6 +140,8 @@ def assess(scene, now=None):
     # reused from a much older run) is still orders of magnitude past this.
     if lights == "confirmed" and fresh(scene.get("actuators_at"), now, 30):
         put("lights", "green", "required actuator readback confirmed")
+    elif lights == "confirmed":
+        put("lights", "unknown", "Light and curtain readings are stale — check again")
     elif lights == "failed":
         # A bulb we could not read is missing evidence. It is a blocker only
         # when the face also needs light (2026-09-14: one lost discovery reply

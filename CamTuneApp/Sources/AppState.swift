@@ -170,7 +170,7 @@ final class AppState {
         "profile stale": "Saved profile is from earlier — may not match now",
         "profile incompatible": "Saved profile doesn't match this setup",
         "required actuator state unknown": "Lights haven't been checked yet",
-        "required actuator state confirmed": "Lights look fine",
+        "required actuator state confirmed": "Light readings are stale — check again",
         "face detection unavailable": "Can't detect a face right now",
     ]
     static func plainLanguage(_ reason: String) -> String { plainReasons[reason] ?? reason }
@@ -405,10 +405,18 @@ final class AppState {
 
     func checkNow(reason: String = "manual") async {
         guard !isChecking, !isCalibrating, !isDeepRepairing, !isMeetingReadyRunning else { return }
-        if let scene = freshLiveScene {
-            applyLivePreviewCheck(scene)
-            maybeSendCallGuardNotification(reason: reason, state: preCallState)
-            return
+        if freshLiveScene != nil {
+            isChecking = true
+            // A fresh camera frame says nothing about six-day-old room
+            // readings. Refresh read-only status before the explicit Check.
+            await room.refreshAndWait()
+            if let scene = freshLiveScene {
+                await applyLivePreviewCheck(scene, logTrigger: Self.manualCheckReasons.contains(reason) ? "manual" : "auto").value
+                maybeSendCallGuardNotification(reason: reason, state: preCallState)
+                isChecking = false
+                return
+            }
+            isChecking = false
         }
         await performCheck(reason: reason, allowCached: reason != "manual" && reason != "framing fix" && reason != "meeting ready")
     }
@@ -482,17 +490,23 @@ final class AppState {
         isChecking = false
     }
 
-    private func applyLivePreviewCheck(_ scene: SceneMetrics) {
+    // Test seam keeps preview/manual event checks off the real event ledger.
+    var sceneContract: (String, [String: Any]) async throws -> [String: Any] = {
+        try await SceneContractService.call($0, payload: $1)
+    }
+
+    @discardableResult
+    func applyLivePreviewCheck(_ scene: SceneMetrics, logTrigger: String? = nil) -> Task<Void, Never> {
         // Preview and Check execute exactly the same Python contract.
         // Captured time is never renewed by a redraw or delayed completion.
         let generation = UUID()
         assessmentGeneration = generation
         lastScene = scene
         lastSceneUpdatedAt = scene.measuredAt
-        Task {
+        return Task {
             do {
                 let payload = await scenePayload(scene)
-                let result = try await SceneContractService.call("assess", payload: payload)
+                let result = try await sceneContract("assess", payload)
                 guard assessmentGeneration == generation else { return }
                 preCallState = result["state"] as? String ?? "unknown"
                 preCallReason = result["reason"] as? String
@@ -508,11 +522,19 @@ final class AppState {
                 // Found live 2026-09-14: this path calls scene_contract.py
                 // directly and never touches ojo.py's own event logging, so a
                 // Check click with the preview open wrote no receipt at all.
-                let eventPayload: [String: Any] = [
-                    "scene": payload, "state": result["state"] as Any, "reason": result["reason"] as Any,
-                    "checks": result["checks"] as Any, "quality": quality as Any, "trigger": "manual",
-                ]
-                Task { _ = try? await SceneContractService.call("log-event", payload: eventPayload) }
+                // Preview frames also reach this method every second. Only
+                // requested checks are events; frames must not invent clicks.
+                if let logTrigger {
+                    let eventPayload: [String: Any] = [
+                        "scene": payload, "state": result["state"] as Any, "reason": result["reason"] as Any,
+                        "checks": result["checks"] as Any, "quality": quality as Any, "trigger": logTrigger,
+                    ]
+                    do {
+                        _ = try await sceneContract("log-event", eventPayload)
+                    } catch {
+                        self.error = "Check completed, but its record could not be saved: " + error.localizedDescription
+                    }
+                }
             } catch {
                 guard assessmentGeneration == generation else { return }
                 preCallState = "unknown"
@@ -541,7 +563,7 @@ final class AppState {
             rows.allSatisfy { $0?.observation != nil && $0?.pending == nil && $0?.observedAt != nil } ? "confirmed" : "unknown"
         payload["actuators_at"] = rows.compactMap { $0?.observedAt?.timeIntervalSince1970 }.min()
         do {
-            let profile = try await SceneContractService.call("profile-select", payload: payload)
+            let profile = try await sceneContract("profile-select", payload)
             payload["profile_status"] = profile["status"] as? String ?? "unknown"
         } catch { payload["profile_status"] = "unknown" }
         return payload
@@ -1028,8 +1050,10 @@ final class AppState {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = ["-e", script]
         let output = Pipe()
+        let stderr = Pipe()
+        defer { ShellRunner.closePipes(output, stderr) }
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = stderr
         do {
             try process.run()
             process.waitUntilExit()
@@ -1051,6 +1075,7 @@ final class AppState {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             process.arguments = ["-e", "tell application \"\(appName)\" to count windows"]
             let stderr = Pipe()
+            defer { ShellRunner.closePipes(stderr) }
             process.standardError = stderr
             do {
                 try process.run()

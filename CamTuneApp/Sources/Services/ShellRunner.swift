@@ -15,6 +15,22 @@ enum ShellError: LocalizedError {
 }
 
 enum ShellRunner {
+    // Foundation Pipe/FileHandle lifetime is not a resource cleanup contract.
+    // Explicitly release both ends, including when Process.run() throws.
+    static func closePipes(_ pipes: Pipe?...) {
+        for pipe in pipes.compactMap({ $0 }) {
+            try? pipe.fileHandleForReading.close()
+            try? pipe.fileHandleForWriting.close()
+        }
+    }
+
+    private static func stop(_ process: Process) {
+        guard process.isRunning else { return }
+        // Controllers handle SIGTERM cooperatively (curtains must send Stop).
+        // Keep that contract; do not force-kill a device operation.
+        process.terminate()
+    }
+
     static func controller(executablePath: String, arguments: [String], timeout: Duration) async throws -> String {
         try await runProcess(executableURL: URL(fileURLWithPath: executablePath),
             arguments: arguments, input: nil, timeout: timeout, acceptedExitCodes: [0, 2])
@@ -62,6 +78,7 @@ enum ShellRunner {
         timeout: Duration,
         acceptedExitCodes: Set<Int32> = [0]
     ) async throws -> String {
+        try Task.checkCancellation()
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
@@ -77,41 +94,48 @@ enum ShellRunner {
         process.standardError = stderr
 
         let stdin = input == nil ? nil : Pipe()
+        defer {
+            stop(process)
+            closePipes(stdout, stderr, stdin)
+        }
         if let stdin {
             process.standardInput = stdin
         }
 
         try process.run()
-        if let input, let stdin {
-            stdin.fileHandleForWriting.write(input)
-            stdin.fileHandleForWriting.closeFile()
-        }
-
-        async let stdoutData = stdout.fileHandleForReading.readToEnd() ?? Data()
-        async let stderrData = stderr.fileHandleForReading.readToEnd() ?? Data()
-
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                while process.isRunning {
-                    try await Task.sleep(for: .milliseconds(50))
-                }
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            async let stdoutData = stdout.fileHandleForReading.readToEnd() ?? Data()
+            async let stderrData = stderr.fileHandleForReading.readToEnd() ?? Data()
+            if let input, let stdin {
+                try stdin.fileHandleForWriting.write(contentsOf: input)
+                try stdin.fileHandleForWriting.close()
             }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                if process.isRunning {
-                    process.terminate()
-                }
-                throw ShellError.timeout
-            }
-            try await group.next()
-            group.cancelAll()
-        }
 
-        let out = String(data: try await stdoutData, encoding: .utf8) ?? ""
-        let err = String(data: try await stderrData, encoding: .utf8) ?? ""
-        if !acceptedExitCodes.contains(process.terminationStatus) {
-            throw ShellError.nonZeroExit(process.terminationStatus, stderr: err)
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    while process.isRunning {
+                        try await Task.sleep(for: .milliseconds(50))
+                    }
+                }
+                group.addTask {
+                    try await Task.sleep(for: timeout)
+                    stop(process)
+                    throw ShellError.timeout
+                }
+                defer { group.cancelAll() }
+                try await group.next()
+            }
+
+            let out = String(data: try await stdoutData, encoding: .utf8) ?? ""
+            let err = String(data: try await stderrData, encoding: .utf8) ?? ""
+            try Task.checkCancellation()
+            if !acceptedExitCodes.contains(process.terminationStatus) {
+                throw ShellError.nonZeroExit(process.terminationStatus, stderr: err)
+            }
+            return out
+        } onCancel: {
+            stop(process)
         }
-        return out
     }
 }
