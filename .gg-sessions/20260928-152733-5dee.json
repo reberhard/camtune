@@ -1,0 +1,18 @@
+{
+  "schema": "gg-session-lease.v1",
+  "branch": "session/gg-mini/20260928-152733-5dee/ojo-subprocess-resource-repair",
+  "repo": "camtune",
+  "host": "gg-mini",
+  "session_id": "20260928-152733-5dee",
+  "purpose": "ojo-subprocess-resource-repair",
+  "paths": [
+    "CamTuneApp/",
+    "README.md",
+    "tests/"
+  ],
+  "worktree": "/Users/eberhard/gg-worktrees/camtune/20260928-152733-5dee",
+  "base": "26a9ebec7cc93cc4356689c4a67f5d2f36331fcd",
+  "created_at": "2026-09-28T21:27:34+00:00",
+  "status": "active",
+  "agent": ""
+}
