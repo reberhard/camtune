@@ -15,6 +15,10 @@ the camera. The native transaction budget covers framing, exposure and a final
 whole-room verification. A new accepted profile is saved only after that final
 verification passes every non-profile check. Save failures remain visible without
 erasing the successful correction record. Ordinary Fix Framing remains framing-only.
+Accepted profiles store replayable commands, not auto-controlled gain, exposure,
+white-balance or focus readings. Selecting an older accepted profile applies the
+same filtering without rewriting the original file. Explicit manual settings are
+preserved. Regression: test_profile_auto_controls.py.
 
 Calibration CLI: scene_repair.py calibrate-light with an explicit camera identity,
 operation UUID/original issued time, device and brightness. It runs one light A/B/A

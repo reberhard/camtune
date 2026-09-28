@@ -179,6 +179,19 @@ def profile_status(record, camera_id, ambient, now=None):
     return "compatible"
 
 
+def profile_commands(settings):
+    """Do not replay sensor-controlled readings as manual camera commands."""
+    commands = dict(settings)
+    if settings.get("auto_exposure_mode") in (2, 4, 8):
+        for key in ("absolute_exposure_time", "exposure_time_absolute", "gain"):
+            commands.pop(key, None)
+    if settings.get("auto_white_balance_temperature") == 1:
+        commands.pop("white_balance_temperature", None)
+    if settings.get("auto_focus") == 1:
+        commands.pop("absolute_focus", None)
+    return commands
+
+
 class ProfileStore:
     def __init__(self, root=None):
         self.root = Path(root or Path.home() / ".config/camtune")
@@ -213,6 +226,8 @@ class ProfileStore:
     def select(self, scene, now=None):
         data = self.read()
         record = data["profiles"].get(str(scene.get("camera_id")) + ":" + bucket(now))
+        if record and isinstance(record.get("settings"), dict):
+            record = dict(record, settings=profile_commands(record["settings"]))
         return {"status": profile_status(record, scene.get("camera_id"), scene.get("background_luma_mean"), now), "profile": record}
 
     def save(self, scene, settings, now=None):
@@ -234,7 +249,7 @@ class ProfileStore:
             data = self.read()
             record = {"schema_version": 2, "accepted": True, "accepted_at": now,
                       "camera_id": scene["camera_id"], "room": "polanco-office", "bucket": bucket(now),
-                      "background_luma_mean": scene["background_luma_mean"], "settings": settings}
+                      "background_luma_mean": scene["background_luma_mean"], "settings": profile_commands(settings)}
             data["profiles"][scene["camera_id"] + ":" + bucket(now)] = record
             fd, temporary = tempfile.mkstemp(dir=self.root, prefix=".profiles-")
             try:
