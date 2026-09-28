@@ -8,7 +8,7 @@ struct BasicLightsView: View {
         // Bumped from .small/.caption2 to .regular/.subheadline-.caption.
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Power and brightness").font(.subheadline)
+                DiagnosticText("Power and brightness").font(.subheadline)
                 Spacer()
                 Button("Refresh") { room.refresh() }
                     .disabled(room.isRefreshing)
@@ -18,7 +18,7 @@ struct BasicLightsView: View {
                 BasicLightRow(room: room, target: target)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text("Scenes — set power and color").font(.caption)
+                DiagnosticText("Scenes — set power and color").font(.caption)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 110))]) {
                     ForEach(LightService.scenes) { scene in
                         Button(scene.name) { room.light(scene.id, target: scene.id == "reading" ? "pie" : "all") }
@@ -44,9 +44,9 @@ private struct BasicLightRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text(name).font(.subheadline).fontWeight(.medium)
+                DiagnosticText(name).font(.subheadline).fontWeight(.medium)
                 Spacer()
-                Text(room.summary(target)).font(.caption)
+                DiagnosticText(room.summary(target)).font(.caption)
                     .accessibilityIdentifier("\(target)-status")
                 Button("On") { room.light("on", target: target) }
                     .accessibilityIdentifier("\(target)-on")
@@ -59,7 +59,7 @@ private struct BasicLightRow: View {
                     .accessibilityIdentifier("\(target)-brightness")
                     .disabled(!enabled)
                     .onChange(of: level) { _, _ in adjust() }
-                Text(room.brightness(target).map { "\($0)%" } ?? "—").font(.caption).frame(width: 36, alignment: .trailing)
+                DiagnosticText(room.brightness(target).map { "\($0)%" } ?? "—").font(.caption).frame(width: 36, alignment: .trailing)
             }
             DisclosureGroup("Color") {
                 Slider(value: $hue, in: 0...360, step: 1).accessibilityLabel("\(name) hue")
@@ -68,7 +68,7 @@ private struct BasicLightRow: View {
                     .onChange(of: saturation) { _, _ in adjust() }
             }.font(.caption).disabled(!enabled)
             ForEach(room.errors(target), id: \.self) { message in
-                Text(message).font(.caption2).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                DiagnosticText(message).font(.caption2).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
             if !room.errors(target).isEmpty {
                 Button("Dismiss error") { room.dismiss(target) }
@@ -102,11 +102,11 @@ struct BasicCurtainsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Picker("Curtain", selection: $target) {
-                Text("Left").tag("left")
-                Text("Right").tag("right")
-                Text("Both").tag("both")
+                DiagnosticText("Left").tag("left")
+                DiagnosticText("Right").tag("right")
+                DiagnosticText("Both").tag("both")
             }.pickerStyle(.segmented)
-            Text(room.summary(target, curtains: true)).font(.subheadline)
+            DiagnosticText(room.summary(target, curtains: true)).font(.subheadline)
                 .accessibilityIdentifier("curtain-status")
             HStack {
                 Button("Open") { room.curtain("open", target: target) }
@@ -123,7 +123,7 @@ struct BasicCurtainsView: View {
                 }
             }
             ForEach(room.errors(target, curtains: true), id: \.self) { message in
-                Text(message).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                DiagnosticText(message).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
             if !room.errors(target, curtains: true).isEmpty {
                 Button("Dismiss error") { room.dismiss(target, curtains: true) }

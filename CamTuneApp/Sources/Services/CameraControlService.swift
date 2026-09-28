@@ -4,7 +4,14 @@ import Observation
 @MainActor @Observable
 final class CameraControlService {
     var pending: Set<String> = []
-    var errors: [String: String] = [:]
+    var errors: [String: String] = [:] {
+        didSet {
+            for (control, message) in errors where oldValue[control] != message {
+                Diagnostics.shared.record("camera_error", message,
+                    context: ["control": control, "operation": generations[control]?.uuidString ?? "unassigned"])
+            }
+        }
+    }
     var observed = UVCSettings()
     private var generations: [String: UUID] = [:]
     private var tasks: [String: Task<Void, Never>] = [:]
@@ -34,6 +41,9 @@ final class CameraControlService {
             } catch is CancellationError {
                 if generations[control] == operation { errors[control] = "Camera change cancelled — refresh" }
             } catch {
+                Diagnostics.shared.failure(error, action: "camera.set",
+                    context: ["control": control, "operation": operation.uuidString,
+                              "device": "\(device.vendor):\(device.product)"])
                 if generations[control] == operation { errors[control] = error.localizedDescription }
             }
             if generations[control] == operation { pending.remove(control); tasks[control] = nil }

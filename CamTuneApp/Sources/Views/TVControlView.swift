@@ -7,7 +7,7 @@ struct TVControlView: View {
         VStack(spacing: 16) {
             // Playback controls
             VStack(spacing: 8) {
-                Text("Playback")
+                DiagnosticText("Playback")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -49,14 +49,14 @@ struct TVControlView: View {
 
             // Audio routing
             VStack(spacing: 8) {
-                Text("Audio Output")
+                DiagnosticText("Audio Output")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 Picker("", selection: $state.audioRoute) {
                     ForEach(AudioRoute.allCases, id: \.self) { route in
-                        Text(route.label).tag(route)
+                        DiagnosticText(route.label).tag(route)
                     }
                 }
                 .pickerStyle(.segmented)

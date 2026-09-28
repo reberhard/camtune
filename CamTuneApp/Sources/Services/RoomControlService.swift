@@ -213,11 +213,17 @@ final class RoomControlService {
                     devices[id, default: RoomDevice()].failed = false
                     devices[id, default: RoomDevice()].error = nil
                 } else {
+                    Diagnostics.shared.record("device_error", row.error ?? "Result not confirmed",
+                        context: ["device": id, "operation": receipt.operation_id,
+                                  "action": args.first ?? "unknown", "status": row.status])
                     devices[id, default: RoomDevice()].failed = true
                     devices[id, default: RoomDevice()].error = row.error ?? "Result not confirmed"
                 }
             }
         } catch {
+            Diagnostics.shared.failure(error, action: args.first ?? "unknown",
+                context: ["devices": ids.joined(separator: ","), "script": script,
+                          "operation": operation ?? "refresh", "stage": "transport_or_receipt"])
             for id in ids where acceptsResult(id) {
                 devices[id, default: RoomDevice()].pending = nil
                 devices[id, default: RoomDevice()].failed = true

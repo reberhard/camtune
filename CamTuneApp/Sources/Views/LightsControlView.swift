@@ -20,7 +20,7 @@ struct LightsControlView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Lights unavailable", systemImage: "lightbulb.slash")
                 .font(.headline)
-            Text("Ojo can still guide your laptop setup, but this Mac is not connected to the desk lights.")
+            DiagnosticText("Ojo can still guide your laptop setup, but this Mac is not connected to the desk lights.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -47,7 +47,7 @@ struct LightsControlView: View {
             .controlSize(.small)
 
             if let summary = state.lightingPlanSummary {
-                Text(summary)
+                DiagnosticText(summary)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -56,7 +56,7 @@ struct LightsControlView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Scenes")
+                    DiagnosticText("Scenes")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     LazyVGrid(columns: [
@@ -72,7 +72,7 @@ struct LightsControlView: View {
                                 VStack(spacing: 2) {
                                     Image(systemName: scene.icon)
                                         .font(.caption)
-                                    Text(scene.name)
+                                    DiagnosticText(scene.name)
                                         .font(.system(size: 9))
                                         .lineLimit(1)
                                 }
@@ -91,7 +91,7 @@ struct LightsControlView: View {
                 ForEach(Array(state.lightFixtures.enumerated()), id: \.element.id) { index, fixture in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text(fixture.name)
+                            DiagnosticText(fixture.name)
                                 .font(.caption)
                                 .fontWeight(.medium)
 
@@ -150,7 +150,7 @@ struct LightsControlView: View {
         onChange: @escaping (Int) -> Void
     ) -> some View {
         HStack(spacing: 6) {
-            Text(label)
+            DiagnosticText(label)
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.tertiary)
                 .frame(width: 12)
@@ -163,7 +163,7 @@ struct LightsControlView: View {
                 step: 1
             )
             .controlSize(.small)
-            Text("\(value)")
+            DiagnosticText("\(value)")
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .frame(width: 28, alignment: .trailing)

@@ -13,6 +13,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp .build/release/OjoApp "$APP/Contents/MacOS/Ojo"
 cp Info.plist "$APP/Contents/"
+/usr/libexec/PlistBuddy -c "Add :OjoSourceCommit string $(git rev-parse HEAD)" "$APP/Contents/Info.plist"
 
 echo "Built: $APP"
 echo ""

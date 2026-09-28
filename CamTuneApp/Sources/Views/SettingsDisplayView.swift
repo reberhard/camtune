@@ -25,7 +25,7 @@ struct SettingsDisplayView: View {
                             Circle()
                                 .fill(autoIsOn(control: control, value: value) ? .green : .secondary)
                                 .frame(width: 6, height: 6)
-                            Text(label)
+                            DiagnosticText(label)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -41,12 +41,12 @@ struct SettingsDisplayView: View {
                 ForEach(Self.displayControls, id: \.self) { control in
                     if let value = settings.intValue(for: control) {
                         HStack {
-                            Text(formatLabel(control))
+                            DiagnosticText(formatLabel(control))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                             Spacer()
-                            Text("\(value)")
+                            DiagnosticText("\(value)")
                                 .font(.caption.monospacedDigit())
                                 .fontWeight(.medium)
                         }

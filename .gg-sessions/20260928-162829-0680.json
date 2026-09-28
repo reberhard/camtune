@@ -1,0 +1,16 @@
+{
+  "schema": "gg-session-lease.v1",
+  "branch": "session/gg-mini/20260928-162829-0680/ojo-visible-error-logging",
+  "repo": "camtune",
+  "host": "gg-mini",
+  "session_id": "20260928-162829-0680",
+  "purpose": "ojo-visible-error-logging",
+  "paths": [
+    "CamTuneApp"
+  ],
+  "worktree": "/Users/eberhard/gg-worktrees/camtune/20260928-162829-0680",
+  "base": "79992890aa0b8a63584eaef500c0ea604aaaeab7",
+  "created_at": "2026-09-28T22:28:30+00:00",
+  "status": "active",
+  "agent": ""
+}
