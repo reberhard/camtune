@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import threading
-from scene_contract import assess, finite, fresh, clamp_box
+from scene_contract import assess, finite, fresh, clamp_box, profile_commands
 from camera_control import pan_tilt_limits
 
 _shutdown = threading.Event()
@@ -372,7 +372,9 @@ def prepare_scene(io, calibration, manual_overrides, current=lambda: True, clock
                 desired = selection["profile"]["settings"]
                 changes = {k:v for k,v in desired.items() if camera_before.get(k)!=v}
                 if changes:
-                    baseline = {before["camera_id"]:camera_before}
+                    # Undo only commands this profile changed, never replay
+                    # unrelated or automatically varying sensor readbacks.
+                    baseline = {before["camera_id"]: {k:v for k,v in profile_commands(camera_before).items() if k in changes}}
                     touched.append(before["camera_id"])
                     observed = io.write(changes,deadline)
                     if any(observed.get(k)!=v for k,v in changes.items()):
