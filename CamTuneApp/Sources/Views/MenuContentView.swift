@@ -147,9 +147,17 @@ struct MenuContentView: View {
                 .accessibilityIdentifier("room-refresh")
                 Menu {
                     Button("More tools…") { withAnimation(Ojo.spring) { page = .more } }
-                    Toggle(AppState.observeChecksEnabled ? "Auto-check (observe only)" : "Auto-check (needs call validation)",
-                           isOn: $state.autoCheckEnabled)
-                        .disabled(!AppState.observeChecksEnabled)
+                    Toggle("Keep camera ready (every 30 min, weekdays)", isOn: $state.keepCameraReady)
+                    if let status = state.scheduledStatus {
+                        Button(status) {}.disabled(true)
+                    }
+                    Divider()
+                    Toggle("Open Ojo at login", isOn: Binding(
+                        get: { state.loginItemEnabled },
+                        set: { state.setOpenAtLogin($0) }))
+                    if let note = LoginItemService.statusNote {
+                        Button(note) {}.disabled(true)
+                    }
                     Divider()
                     Button("Quit Ojo") { NSApplication.shared.terminate(nil) }
                 } label: {
