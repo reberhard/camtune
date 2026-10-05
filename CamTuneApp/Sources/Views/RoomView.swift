@@ -7,20 +7,6 @@ struct RoomView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Ojo.Space.gap) {
-            HStack {
-                OjoSectionTitle("Room")
-                Spacer()
-                Button { room.refresh() } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12, weight: .semibold))
-                        .symbolEffect(.pulse, isActive: room.isRefreshing)
-                }
-                .buttonStyle(OjoIconButtonStyle())
-                .disabled(room.isRefreshing)
-                .help("Refresh lights and curtains")
-                .accessibilityLabel("Refresh lights and curtains")
-                .accessibilityIdentifier("room-refresh")
-            }
             ScenesGrid(room: room)
             LightsCard(room: room)
             CurtainsCard(room: room)
@@ -65,8 +51,8 @@ private struct SceneTile: View {
                     .minimumScaleFactor(0.85)
                     .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity, minHeight: 58)
-            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .padding(.vertical, 2)
             .background(
                 RoundedRectangle(cornerRadius: Ojo.Radius.control, style: .continuous)
                     .fill(Color(nsColor: .controlBackgroundColor).opacity(hovering ? 0.95 : 0.62))
@@ -187,7 +173,7 @@ private struct LightRow: View {
                 }
             }
             .padding(.horizontal, Ojo.Space.card)
-            .padding(.vertical, 9)
+            .padding(.vertical, 8)
 
             if expanded {
                 VStack(alignment: .leading, spacing: 12) {

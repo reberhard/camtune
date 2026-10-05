@@ -6,7 +6,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static var retainedDelegate: AppDelegate?
 
-    private static let popoverHeight: CGFloat = 790
+    private static let popoverHeight: CGFloat = 930
     private let appState = AppState()
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?

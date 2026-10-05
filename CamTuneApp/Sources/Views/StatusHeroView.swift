@@ -7,7 +7,7 @@ struct StatusHeroView: View {
 
     var body: some View {
         OjoCard {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 12) {
                     ZStack {
                         Circle().fill(tint.opacity(0.16))
@@ -16,7 +16,7 @@ struct StatusHeroView: View {
                             .foregroundStyle(tint)
                             .symbolRenderingMode(.hierarchical)
                     }
-                    .frame(width: 46, height: 46)
+                    .frame(width: 42, height: 42)
 
                     VStack(alignment: .leading, spacing: 2) {
                         DiagnosticText(title)
@@ -82,6 +82,7 @@ struct StatusHeroView: View {
                     DiagnosticText(footnote)
                         .font(Ojo.Style.note)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -124,13 +125,12 @@ struct StatusHeroView: View {
     }
 
     private var footnote: String? {
-        if let message = state.statusMessage, !message.isEmpty, !isBusy { return message }
-        var parts: [String] = []
+        if let message = state.statusMessage, !message.isEmpty, !isBusy { return Self.plainStatus(message) }
+        // One line: when it was checked, or what the button will and will not touch.
         if let checked = state.preCallLastChecked, level != nil {
-            parts.append("Checked " + Self.relative(checked))
+            return "Checked " + Self.relative(checked) + " · " + Self.shortScope(state.preparationScope, brief: true)
         }
-        parts.append(Self.shortScope(state.preparationScope))
-        return parts.joined(separator: " · ")
+        return Self.shortScope(state.preparationScope)
     }
 
     private var symbol: String {
@@ -151,9 +151,18 @@ struct StatusHeroView: View {
         }
     }
 
+    /// AppState's outcome sentences end with an engineering pointer ("see scene check
+    /// for remaining issues"); the hero already shows the remaining issue itself.
+    private static func plainStatus(_ message: String) -> String {
+        message.replacingOccurrences(of: "; see scene check for remaining issues.", with: ".")
+            .replacingOccurrences(of: "Lights and curtains unchanged", with: "Lights and curtains untouched")
+    }
+
     /// The scope text comes from AppState; say the same thing in fewer words.
-    private static func shortScope(_ scope: String) -> String {
-        if scope.contains("stay as you set them") { return "Camera only — lights and curtains stay put" }
+    private static func shortScope(_ scope: String, brief: Bool = false) -> String {
+        if scope.contains("stay as you set them") {
+            return brief ? "Camera only" : "Camera only — lights and curtains stay put"
+        }
         if scope.contains("measured room adjustments") { return "Camera and measured room adjustments" }
         return scope
     }

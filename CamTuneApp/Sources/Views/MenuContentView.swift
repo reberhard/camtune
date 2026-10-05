@@ -2,7 +2,6 @@ import SwiftUI
 
 struct MenuContentView: View {
     @Bindable var state: AppState
-    @State private var cameraExpanded = false
     @State private var page: Page = .main
 
     private enum Page { case main, more }
@@ -43,16 +42,16 @@ struct MenuContentView: View {
 
     private var mainPage: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Ojo.Space.gap) {
+            VStack(alignment: .leading, spacing: 10) {
                 StatusHeroView(state: state)
 
                 if let error = state.error {
                     errorBanner(error)
                 }
 
-                RoomView(room: state.room)
+                cameraSection
 
-                cameraCard
+                RoomView(room: state.room)
             }
             .padding(.horizontal, Ojo.Space.page)
             .padding(.top, 14)
@@ -61,6 +60,23 @@ struct MenuContentView: View {
         .scrollBounceBehavior(.basedOnSize)
         .scrollIndicators(.automatic)
         .frame(maxHeight: .infinity, alignment: .top)
+        // The preview is the point of the app, so it is always on while this page
+        // is showing, and off when the popover closes or you open More tools.
+        .onAppear { startPreviewIfReady() }
+        // The camera is discovered after the popover first appears; start once it is known.
+        // Starting earlier raises a spurious "could not be matched" error.
+        .onChange(of: state.currentDevice?.name) { _, _ in startPreviewIfReady() }
+        .onDisappear {
+            if !state.isOptimizing && !state.isChecking && !state.isCalibrating
+                && !state.isDeepRepairing && !state.isMeetingReadyRunning {
+                state.stopPreview()
+            }
+        }
+    }
+
+    private func startPreviewIfReady() {
+        guard state.currentDevice != nil else { return }
+        state.startPreview()
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -87,51 +103,21 @@ struct MenuContentView: View {
         )
     }
 
-    // The preview is off until you ask for it: it is large, it shows your face,
-    // and it keeps the camera running.
-    private var cameraCard: some View {
+    private var cameraSection: some View {
         OjoCard(padding: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 12) {
-                    Image(systemName: "video.fill")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(Color.indigo)
-                        .frame(width: 34, height: 34)
-                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.indigo.opacity(0.14)))
-                    VStack(alignment: .leading, spacing: 1) {
-                        DiagnosticText("Camera preview")
-                            .font(Ojo.Style.rowTitle)
-                        DiagnosticText(cameraExpanded ? "Live" : "Off")
-                            .font(Ojo.Style.note).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                    Toggle("", isOn: $cameraExpanded.animation(Ojo.spring))
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                        .accessibilityLabel("Camera preview")
-                        .controlSize(.small)
-                        .accessibilityIdentifier("camera-preview-toggle")
-                }
-                .padding(.horizontal, Ojo.Space.card)
-                .padding(.vertical, 9)
-
-                if cameraExpanded {
-                    VStack(alignment: .leading, spacing: 0) {
-                        preview
-                        if !state.canAdjustComposition {
-                            DiagnosticText("Pan and tilt need more zoom, or aren't calibrated for this camera yet.")
-                                .font(Ojo.Style.note).foregroundStyle(.secondary)
-                                .padding(.horizontal, Ojo.Space.card)
-                                .padding(.top, 8)
-                        }
-                    }
-                    .padding(.bottom, 12)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                preview
+                QuickFramingControlsView(state: state)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                if !state.canAdjustComposition {
+                    DiagnosticText("Pan and tilt need more zoom, or aren't calibrated for this camera yet.")
+                        .font(Ojo.Style.note).foregroundStyle(.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 10)
                 }
             }
-        }
-        .onChange(of: cameraExpanded) { _, expanded in
-            if expanded { state.startPreview() } else { state.stopPreview() }
+            .clipShape(RoundedRectangle(cornerRadius: Ojo.Radius.card, style: .continuous))
         }
     }
 
@@ -149,6 +135,16 @@ struct MenuContentView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
+                Button { state.room.refresh() } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 13, weight: .medium))
+                        .symbolEffect(.pulse, isActive: state.room.isRefreshing)
+                }
+                .buttonStyle(OjoIconButtonStyle())
+                .disabled(state.room.isRefreshing)
+                .help("Refresh lights and curtains")
+                .accessibilityLabel("Refresh lights and curtains")
+                .accessibilityIdentifier("room-refresh")
                 Menu {
                     Button("More tools…") { withAnimation(Ojo.spring) { page = .more } }
                     Toggle(AppState.observeChecksEnabled ? "Auto-check (observe only)" : "Auto-check (needs call validation)",
@@ -176,42 +172,33 @@ struct MenuContentView: View {
     private var preview: some View {
         if let session = state.captureSession {
             CameraPreviewView(session: session)
-                .frame(height: 205)
+                .frame(maxWidth: .infinity)
+                .frame(height: 207)
                 .overlay {
                     CompositionOverlayView(scene: state.lastScene)
                 }
                 .overlay(alignment: .topTrailing) {
                     if let activityLabel {
                         ActivityBadge(text: activityLabel)
-                            .padding(8)
+                            .padding(10)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(.black.opacity(0.08), lineWidth: 1)
+                .overlay(alignment: .bottomLeading) {
+                    SceneQualityPillsView(scene: state.lastScene)
+                        .padding(10)
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 4)
-
-            SceneQualityPillsView(scene: state.lastScene)
-                .padding(.horizontal, 16)
-
-            QuickFramingControlsView(state: state)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
         } else {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            Rectangle()
                 .fill(.quaternary)
-                .frame(height: 205)
+                .frame(maxWidth: .infinity)
+                .frame(height: 207)
                 .overlay {
                     PreviewUnavailableView(
-                        title: state.error == nil ? "Camera preview starting" : "Camera unavailable",
-                        message: state.statusMessage ?? "Ojo will keep controls available while the camera comes online.",
+                        title: state.error == nil ? "Starting the camera" : "Camera unavailable",
+                        message: state.error ?? "Starting the camera…",
                         systemImage: state.error == nil ? "video" : "camera.badge.exclamationmark"
                     )
                 }
-                .padding(.horizontal, 12)
         }
     }
 
@@ -230,75 +217,69 @@ private struct QuickFramingControlsView: View {
     @Bindable var state: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Label("Manual framing", systemImage: "move.3d")
-                    .font(Ojo.Style.note)
-                    .fontWeight(.medium)
-                Spacer()
-                DiagnosticText("Small steps · Undo available")
-                    .font(Ojo.Style.note)
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 6) {
+            FrameButton(icon: "arrow.left", help: "Move the camera image left") {
+                await state.nudgeComposition(dx: -state.compositionStep, dy: 0)
             }
-
-            HStack(spacing: 6) {
-                Button {
-                    Task { await state.nudgeComposition(dx: 0, dy: state.compositionStep) }
-                } label: {
-                    Label("Up", systemImage: "arrow.up")
-                }
-                .help("Move the camera image up")
-
-                Button {
-                    Task { await state.nudgeComposition(dx: -state.compositionStep, dy: 0) }
-                } label: {
-                    Label("Left", systemImage: "arrow.left")
-                }
-                .help("Move the camera image left")
-
-                Button {
-                    Task { await state.nudgeComposition(dx: state.compositionStep, dy: 0) }
-                } label: {
-                    Label("Right", systemImage: "arrow.right")
-                }
-                .help("Move the camera image right")
-
-                Button {
-                    Task { await state.nudgeComposition(dx: 0, dy: -state.compositionStep) }
-                } label: {
-                    Label("Down", systemImage: "arrow.down")
-                }
-                .help("Move the camera image down")
-
-                Divider()
-                    .frame(height: 18)
-
-                Button {
-                    Task { await state.nudgeZoom(delta: -20) }
-                } label: {
-                    Image(systemName: "minus.magnifyingglass")
-                }
-                .help("Zoom out")
-
-                Button {
-                    Task { await state.nudgeZoom(delta: 20) }
-                } label: {
-                    Image(systemName: "plus.magnifyingglass")
-                }
-                .help("Zoom in")
-
-                Button {
-                    Task { await state.undoCompositionNudge() }
-                } label: {
-                    Image(systemName: "arrow.uturn.backward")
-                }
-                .help("Undo the last pan or tilt adjustment")
-                .disabled(state.lastComposition == nil)
+            FrameButton(icon: "arrow.up", help: "Move the camera image up") {
+                await state.nudgeComposition(dx: 0, dy: state.compositionStep)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(state.currentDevice == nil)
+            FrameButton(icon: "arrow.down", help: "Move the camera image down") {
+                await state.nudgeComposition(dx: 0, dy: -state.compositionStep)
+            }
+            FrameButton(icon: "arrow.right", help: "Move the camera image right") {
+                await state.nudgeComposition(dx: state.compositionStep, dy: 0)
+            }
+            Spacer(minLength: 4)
+            FrameButton(icon: "minus.magnifyingglass", help: "Zoom out") {
+                await state.nudgeZoom(delta: -20)
+            }
+            FrameButton(icon: "plus.magnifyingglass", help: "Zoom in") {
+                await state.nudgeZoom(delta: 20)
+            }
+            Spacer(minLength: 4)
+            FrameButton(icon: "arrow.uturn.backward", help: "Undo the last pan or tilt adjustment",
+                        disabled: state.lastComposition == nil) {
+                await state.undoCompositionNudge()
+            }
         }
+        .disabled(state.currentDevice == nil)
+    }
+}
+
+private struct FrameButton: View {
+    let icon: String
+    let help: String
+    var disabled = false
+    let action: () async -> Void
+
+    var body: some View {
+        Button {
+            Task { await action() }
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 38, height: 32)
+        }
+        .buttonStyle(FrameButtonStyle())
+        .disabled(disabled)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+private struct FrameButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.primary)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color.primary.opacity(configuration.isPressed ? 0.16 : 0.07))
+            )
+            .opacity(isEnabled ? 1 : 0.4)
+            .animation(.snappy(duration: 0.12), value: configuration.isPressed)
     }
 }
 
@@ -324,13 +305,12 @@ private struct PreviewUnavailableView: View {
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: systemImage)
-                .font(.title2)
+                .font(.system(size: 24, weight: .regular))
                 .foregroundStyle(.secondary)
             DiagnosticText(title)
-                .font(Ojo.Style.note)
-                .fontWeight(.semibold)
+                .font(Ojo.Style.rowTitle)
             DiagnosticText(message)
-                .font(Ojo.Style.note)
+                .font(Ojo.Style.rowCaption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
@@ -600,12 +580,12 @@ private struct SceneQualityPillsView: View {
             DiagnosticText(value)
                 .fontWeight(.medium)
         }
-        .font(.system(size: 10))
+        .font(.system(size: 11))
         .lineLimit(1)
         .minimumScaleFactor(0.8)
-        .padding(.horizontal, 7)
+        .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(.quaternary)
+        .background(.ultraThinMaterial)
         .clipShape(Capsule())
     }
 
