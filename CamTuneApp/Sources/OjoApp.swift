@@ -6,6 +6,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static var retainedDelegate: AppDelegate?
 
+    private static let popoverHeight: CGFloat = 930
     private let appState = AppState()
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
@@ -49,10 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 400, height: 680)
+        popover.contentSize = NSSize(width: 400, height: Self.popoverHeight)
         popover.contentViewController = NSHostingController(
             rootView: MenuContentView(state: appState)
-                .frame(width: 400, height: 680)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         )
         self.popover = popover
         log("status item installed")
@@ -63,6 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
+            // Never taller than the screen: a laptop display is much shorter than a monitor.
+            let available = (sender.window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 800
+            popover.contentSize = NSSize(width: 400, height: min(Self.popoverHeight, available - 24))
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
             NSApp.activate(ignoringOtherApps: true)
         }
