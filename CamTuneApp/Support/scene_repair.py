@@ -336,6 +336,16 @@ def lighting_plan(scene, responses, manual_overrides, *, curtains_validated=Fals
     return {"status": "planned", "changes": [selected]}
 
 
+# Whole-routine budget for Make Me Look Good. It was 20 s, but each room readback
+# alone takes ~4-9 s and the routine reads the room twice (before and after) plus a
+# lamp status and the change itself, so on 2026-10-05 the real button always ended
+# "No time for a settled frame" and restored. The app kills the helper at 45 s
+# (AppState.sceneRepair) and a restore gets 10 s on top, so keep budget + 10 < 45.
+PREPARE_BUDGET_SECONDS = 32
+APP_HELPER_TIMEOUT_SECONDS = 45  # keep equal to AppState.sceneRepair for "prepare"
+RESTORE_BUDGET_SECONDS = 10
+
+
 def prepare_scene(io, calibration, manual_overrides, current=lambda: True, clock=time.time):
     """Explicit preparation using only a physically validated response map.
 
@@ -345,7 +355,7 @@ def prepare_scene(io, calibration, manual_overrides, current=lambda: True, clock
     is turned on as a side effect of an adjustment. No AI output is itself a
     device command; any future proposal must pass this same planner/transaction.
     """
-    deadline = clock() + 20
+    deadline = clock() + PREPARE_BUDGET_SECONDS
     baseline = None
     touched = []
     outcomes = []
@@ -432,7 +442,7 @@ def prepare_scene(io, calibration, manual_overrides, current=lambda: True, clock
         if not touched or baseline is None:
             return {"status":"could_not_verify", "reason":str(exc), "outcomes":outcomes}
         try:
-            receipt = io.restore(baseline, touched, clock() + 10)
+            receipt = io.restore(baseline, touched, clock() + RESTORE_BUDGET_SECONDS)
             if receipt.get("status") != "confirmed":
                 raise ValueError("Restoration not confirmed")
             return {"status":"worse_or_unverified_restored", "reason":str(exc), "outcomes":outcomes}

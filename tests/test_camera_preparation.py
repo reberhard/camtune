@@ -73,3 +73,20 @@ def test_profile_save_failure_and_supersession_preserve_correction_record(tmp_pa
     io = camera([scene()])
     result = accept_verified_profile(io,{"status":"improved"},store,current=lambda:False,clock=lambda:io.now)
     assert not store.path.exists() and "superseded" in result["profile_error"]
+
+
+def test_prepare_budget_plus_restore_stays_inside_the_app_helper_timeout():
+    """Regression 2026-10-05: a 20 s budget could never finish (two room readbacks,
+    a lamp status and the change), but a budget that is too long gets the helper
+    killed mid-restore by the app's 45 s limit."""
+    import scene_repair
+    assert scene_repair.PREPARE_BUDGET_SECONDS >= 30
+    assert (scene_repair.PREPARE_BUDGET_SECONDS + scene_repair.RESTORE_BUDGET_SECONDS
+            < scene_repair.APP_HELPER_TIMEOUT_SECONDS)
+
+
+def test_app_helper_timeout_constant_matches_the_swift_source():
+    import re, pathlib, scene_repair
+    swift = (pathlib.Path(__file__).resolve().parents[1] / "CamTuneApp/Sources/AppState.swift").read_text()
+    m = re.search(r'command == "camera-prepare" \? 75 : (\d+)', swift)
+    assert m and int(m.group(1)) == scene_repair.APP_HELPER_TIMEOUT_SECONDS
