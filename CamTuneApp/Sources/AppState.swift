@@ -291,6 +291,32 @@ final class AppState {
     // Debounce UVC slider changes
     private var pendingUVCTask: Task<Void, Never>?
     private var autoCheckTask: Task<Void, Never>?
+
+    // MARK: Keep camera ready (scheduled) and open at login
+    /// Every 30 minutes on weekdays, 8 AM to 6 PM: check, and correct the camera only if it is
+    /// not green. On by default (Ryan, 2026-10-05); the switch lives in the footer menu.
+    var keepCameraReady = OjoPreferences.keepCameraReady() {
+        didSet {
+            guard keepCameraReady != oldValue else { return }
+            UserDefaults.standard.set(keepCameraReady, forKey: OjoPreferences.keepCameraReadyKey)
+            if keepCameraReady {
+                correctionGuard.reset()
+                scheduledNote = nil
+                startScheduledPrepare()
+            } else {
+                scheduleTask?.cancel()
+                scheduleTask = nil
+            }
+        }
+    }
+    /// Last scheduled run, for the menu ("Last check 1:30 PM: looked good").
+    var scheduledStatus: String?
+    /// Only what Ryan needs to act on (paused, could not finish); routine runs stay quiet.
+    var scheduledNote: String?
+    var loginItemEnabled = LoginItemService.isEnabled
+    private(set) var lastCameraPrepareStatus: String?
+    private var scheduleTask: Task<Void, Never>?
+    private var correctionGuard = CorrectionLoopGuard()
     private var lastAutoCheck: Date?
     private var lastCallGuardNotification: Date?
 
@@ -457,7 +483,7 @@ final class AppState {
             }
             isChecking = false
         }
-        await performCheck(reason: reason, allowCached: reason != "manual" && reason != "framing fix" && reason != "meeting ready")
+        await performCheck(reason: reason, allowCached: reason != "manual" && reason != "framing fix" && reason != "meeting ready" && reason != "scheduled")
     }
 
     /// Every reason a check can carry that did NOT come from the 90s
@@ -465,7 +491,7 @@ final class AppState {
     /// activeVideoCallAppName) is an "auto" trigger for --trigger and for
     /// ojo.py's idle gating.
     private static let manualCheckReasons: Set<String> = [
-        "manual", "framing fix", "meeting ready",
+        "manual", "framing fix", "meeting ready", "scheduled",
         "background guidance", "background fix", "lighting guidance",
     ]
 
@@ -951,6 +977,102 @@ final class AppState {
         return "Open Ojo and run Meeting Ready."
     }
 
+    // MARK: Scheduled "keep camera ready"
+
+    func startScheduledPrepare() {
+        scheduleTask?.cancel()
+        scheduleTask = nil
+        guard keepCameraReady else { return }
+        let policy = ScheduledPreparePolicy.current()
+        scheduleTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(policy.initialDelaySeconds))
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.runScheduledPrepare(policy: policy)
+                try? await Task.sleep(for: .seconds(policy.intervalSeconds))
+            }
+        }
+    }
+
+    func runScheduledPrepare(policy: ScheduledPreparePolicy) async {
+        guard keepCameraReady else { return }
+        let outcome = await scheduledOutcome(policy: policy)
+        scheduledStatus = Self.describe(outcome, at: Date())
+        Diagnostics.shared.record("scheduled_prepare", Self.label(outcome), context: [
+            "state": preCallState ?? "", "reason": preCallReason ?? ""])
+        switch outcome {
+        case .ok, .corrected: scheduledNote = nil
+        case .failed: scheduledNote = "Couldn't keep the camera ready on the last check. It will try again."
+        case .skipped: break
+        }
+        if correctionGuard.record(outcome) {
+            keepCameraReady = false
+            scheduledNote = "Paused: the camera needed correcting on two checks in a row. "
+                + "Turn \"Keep camera ready\" back on from the ••• menu when you want it."
+        }
+    }
+
+    /// Check first (read-only); adjust the camera only if the scene is not green. Never lights
+    /// or curtains, whatever the room-adjustment switch says.
+    private func scheduledOutcome(policy: ScheduledPreparePolicy) async -> ScheduledOutcome {
+        guard policy.isWorkTime(Date()) else { return .skipped("outside work hours") }
+        if currentDevice == nil { await startUp() }
+        guard currentDevice != nil else { return .skipped("no camera found") }
+        guard !isChecking, !isCalibrating, !isDeepRepairing, !isMeetingReadyRunning else {
+            return .skipped("Ojo is busy")
+        }
+        await checkNow(reason: "scheduled")
+        if let failure = error { return .failed(failure) }
+        if preCallState?.lowercased() == "green" { return .ok }
+        let reason = (preCallReason ?? "").lowercased()
+        if reason.contains("no face") || reason.contains("face detection unavailable")
+            || reason.contains("face rectangle") {
+            return .skipped("no face in frame")
+        }
+        lastCameraPrepareStatus = nil
+        await applyFramingRecommendation(includeExposure: true)
+        if let failure = error { return .failed(failure) }
+        switch lastCameraPrepareStatus {
+        case "improved": return .corrected
+        case "unchanged": return .ok
+        default: return .failed(lastCameraPrepareStatus ?? "no result")
+        }
+    }
+
+    private static func label(_ outcome: ScheduledOutcome) -> String {
+        switch outcome {
+        case .ok: return "ok"
+        case .corrected: return "corrected"
+        case .skipped(let reason): return "skipped: " + reason
+        case .failed(let reason): return "failed: " + reason
+        }
+    }
+
+    private static func describe(_ outcome: ScheduledOutcome, at date: Date) -> String {
+        let time = date.formatted(date: .omitted, time: .shortened)
+        switch outcome {
+        case .ok: return "Last check \(time): looked good"
+        case .corrected: return "Last check \(time): camera adjusted"
+        case .skipped(let reason): return "Last check \(time): skipped (\(reason))"
+        case .failed: return "Last check \(time): couldn't finish"
+        }
+    }
+
+    func ensureLoginItem() {
+        guard OjoPreferences.openAtLogin() else { return }
+        do { try LoginItemService.setEnabled(true) } catch { Diagnostics.shared.failure(error, action: #function) }
+        loginItemEnabled = LoginItemService.isEnabled
+    }
+
+    func setOpenAtLogin(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: OjoPreferences.openAtLoginKey)
+        do { try LoginItemService.setEnabled(on) } catch {
+            Diagnostics.shared.failure(error, action: #function)
+            self.error = "Couldn't change the login setting: " + error.localizedDescription
+        }
+        loginItemEnabled = LoginItemService.isEnabled
+    }
+
     private func startAutomaticChecks() {
         guard autoCheckTask == nil else { return }
         autoCheckTask = Task { [weak self] in
@@ -1246,6 +1368,7 @@ final class AppState {
             let result = try await sceneRepair(includeExposure ? "camera-prepare" : "frame", payload)
             guard cameraGeneration == generation else { return }
             guard let status = result["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }
+            lastCameraPrepareStatus = status
             Diagnostics.shared.record(includeExposure ? "camera_preparation_result" : "framing_result", status, context: ["operation": operation.uuidString,
                 "reason": result["reason"] as? String ?? "", "camera": "camera:\(device.vendor):\(device.product)"])
             if status == "improved" || status == "unchanged" {

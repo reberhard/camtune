@@ -125,6 +125,7 @@ struct StatusHeroView: View {
     }
 
     private var footnote: String? {
+        if let note = state.scheduledNote, !isBusy { return note }
         if let message = state.statusMessage, !message.isEmpty, !isBusy { return Self.plainStatus(message) }
         // One line: when it was checked, or what the button will and will not touch.
         if let checked = state.preCallLastChecked, level != nil {

@@ -24,6 +24,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Diagnostics.shared.record("startup", "Ojo started")
         AppState.clearPreviewState()
         installStatusItem()
+        appState.ensureLoginItem()
+        // The camera is otherwise only discovered when the popover is first opened; the
+        // scheduled check has to work for days without anyone opening it.
+        Task { @MainActor in
+            await appState.startUp()
+            appState.startScheduledPrepare()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
