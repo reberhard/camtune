@@ -1,0 +1,18 @@
+{
+  "schema": "gg-session-lease.v1",
+  "branch": "session/gg-mini/20261005-134644-56b2/ojo-scheduled-camera-ready",
+  "repo": "camtune",
+  "host": "gg-mini",
+  "session_id": "20261005-134644-56b2",
+  "purpose": "ojo-scheduled-camera-ready",
+  "paths": [
+    "CamTuneApp/Sources",
+    "CamTuneApp/Tests",
+    "CamTuneApp/DESIGN.md"
+  ],
+  "worktree": "/Users/eberhard/gg-worktrees/camtune/20261005-134644-56b2",
+  "base": "85322f6b9a37a4c79b3a4671a9daa545f04023e1",
+  "created_at": "2026-10-05T19:46:45+00:00",
+  "status": "active",
+  "agent": ""
+}
