@@ -3,101 +3,23 @@ import SwiftUI
 struct MenuContentView: View {
     @Bindable var state: AppState
     @State private var cameraExpanded = false
+    @State private var page: Page = .main
+
+    private enum Page { case main, more }
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    // readinessSummary already carries the reason inline
-                    // ("Scene yellow — ..."); a second line repeating it was
-                    // exactly the clutter Ryan flagged 2026-09-14.
-                    DiagnosticText(state.readinessSummary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if !state.canAdjustComposition {
-                        DiagnosticText("Pan/tilt needs more zoom, or isn't calibrated for this camera yet")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
-                    DiagnosticText(state.preparationScope)
-                        .font(.caption2).foregroundStyle(.secondary)
-                    HStack {
-                        Button("Check") { Task { await state.checkNow() } }
-                        Button("Make Me Look Good") { Task { await state.meetingReadyNow() } }
-                            .disabled(!state.canPrepareScene)
-                    }
-                    .disabled(state.isChecking || state.isMeetingReadyRunning)
-
-                    // Lights and curtains are the first screen, not behind a
-                    // disclosure or a tab. Ryan, 2026-09-03: "I want to be
-                    // able to easily control my lights and curtains... not
-                    // buried once I click on it."
-                    VStack(alignment: .leading, spacing: 6) {
-                        DiagnosticText("Lights")
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
-                        BasicLightsView(room: state.room)
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        DiagnosticText("Curtains")
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
-                        BasicCurtainsView(room: state.room)
-                    }
-
-                    DisclosureGroup("Camera preview & manual controls", isExpanded: $cameraExpanded) {
-                        preview
-                        FineTuneView(state: state)
-                    }
-                    .onChange(of: cameraExpanded) { _, expanded in
-                        if expanded { state.startPreview() } else { state.stopPreview() }
-                    }
+            switch page {
+            case .main:
+                mainPage
+                    .transition(.opacity)
+            case .more:
+                MoreToolsView(state: state) {
+                    withAnimation(Ojo.spring) { page = .main }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 8)
+                .transition(.opacity)
             }
-            .frame(maxHeight: .infinity, alignment: .top)
-
-            if let error = state.error {
-                DiagnosticText(error)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 4)
-            }
-
-            if let msg = state.statusMessage, !state.isOptimizing {
-                DiagnosticText(msg)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 4)
-            }
-
-            Divider()
-
-            HStack {
-                Toggle(isOn: $state.autoCheckEnabled) {
-                    DiagnosticText(AppState.observeChecksEnabled ? "Auto-check (observe only)" : "Auto-check awaits call validation")
-                        .font(.system(size: 10))
-                }
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .disabled(!AppState.observeChecksEnabled)
-
-                Spacer()
-
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
+            footer
         }
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.98))
         .task {
@@ -117,6 +39,139 @@ struct MenuContentView: View {
         }
     }
 
+    // MARK: Main page
+
+    private var mainPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Ojo.Space.gap) {
+                StatusHeroView(state: state)
+
+                if let error = state.error {
+                    errorBanner(error)
+                }
+
+                RoomView(room: state.room)
+
+                cameraCard
+            }
+            .padding(.horizontal, Ojo.Space.page)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollIndicators(.automatic)
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+            DiagnosticText(message)
+                .font(Ojo.Style.subtitle)
+                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(4)
+            Spacer(minLength: 0)
+            Button { state.error = nil } label: { Image(systemName: "xmark") }
+                .buttonStyle(OjoIconButtonStyle())
+                .accessibilityLabel("Dismiss message")
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: Ojo.Radius.control, style: .continuous)
+                .fill(Color.red.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Ojo.Radius.control, style: .continuous)
+                .strokeBorder(Color.red.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    // The preview is off until you ask for it: it is large, it shows your face,
+    // and it keeps the camera running.
+    private var cameraCard: some View {
+        OjoCard(padding: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 12) {
+                    Image(systemName: "video.fill")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(Color.indigo)
+                        .frame(width: 34, height: 34)
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.indigo.opacity(0.14)))
+                    VStack(alignment: .leading, spacing: 1) {
+                        DiagnosticText("Camera preview")
+                            .font(Ojo.Style.rowTitle)
+                        DiagnosticText(cameraExpanded ? "Live" : "Off")
+                            .font(Ojo.Style.note).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Toggle("", isOn: $cameraExpanded.animation(Ojo.spring))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .accessibilityLabel("Camera preview")
+                        .controlSize(.small)
+                        .accessibilityIdentifier("camera-preview-toggle")
+                }
+                .padding(.horizontal, Ojo.Space.card)
+                .padding(.vertical, 9)
+
+                if cameraExpanded {
+                    VStack(alignment: .leading, spacing: 0) {
+                        preview
+                        if !state.canAdjustComposition {
+                            DiagnosticText("Pan and tilt need more zoom, or aren't calibrated for this camera yet.")
+                                .font(Ojo.Style.note).foregroundStyle(.secondary)
+                                .padding(.horizontal, Ojo.Space.card)
+                                .padding(.top, 8)
+                        }
+                    }
+                    .padding(.bottom, 12)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        }
+        .onChange(of: cameraExpanded) { _, expanded in
+            if expanded { state.startPreview() } else { state.stopPreview() }
+        }
+    }
+
+    // MARK: Footer
+
+    private var footer: some View {
+        VStack(spacing: 0) {
+            Divider().opacity(0.6)
+            HStack(spacing: 8) {
+                Image(systemName: "web.camera")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+                DiagnosticText(state.currentDevice?.name ?? "No camera found")
+                    .font(Ojo.Style.note)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                Menu {
+                    Button("More tools…") { withAnimation(Ojo.spring) { page = .more } }
+                    Toggle(AppState.observeChecksEnabled ? "Auto-check (observe only)" : "Auto-check (needs call validation)",
+                           isOn: $state.autoCheckEnabled)
+                        .disabled(!AppState.observeChecksEnabled)
+                    Divider()
+                    Button("Quit Ojo") { NSApplication.shared.terminate(nil) }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("More")
+                .accessibilityIdentifier("more-menu")
+            }
+            .padding(.horizontal, Ojo.Space.page)
+            .padding(.vertical, 9)
+        }
+    }
+
     @ViewBuilder
     private var preview: some View {
         if let session = state.captureSession {
@@ -131,13 +186,12 @@ struct MenuContentView: View {
                             .padding(8)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(.black.opacity(0.08), lineWidth: 1)
                 }
                 .padding(.horizontal, 12)
-                .padding(.top, 12)
                 .padding(.bottom, 4)
 
             SceneQualityPillsView(scene: state.lastScene)
@@ -147,7 +201,7 @@ struct MenuContentView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
         } else {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(.quaternary)
                 .frame(height: 205)
                 .overlay {
@@ -158,7 +212,6 @@ struct MenuContentView: View {
                     )
                 }
                 .padding(.horizontal, 12)
-                .padding(.top, 12)
         }
     }
 
@@ -180,11 +233,11 @@ private struct QuickFramingControlsView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Label("Manual framing", systemImage: "move.3d")
-                    .font(.caption)
+                    .font(Ojo.Style.note)
                     .fontWeight(.medium)
                 Spacer()
                 DiagnosticText("Small steps · Undo available")
-                    .font(.caption2)
+                    .font(Ojo.Style.note)
                     .foregroundStyle(.secondary)
             }
 
@@ -254,7 +307,7 @@ private struct ActivityBadge: View {
 
     var body: some View {
         Label(text, systemImage: "sparkles")
-            .font(.caption2)
+            .font(Ojo.Style.note)
             .fontWeight(.medium)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
@@ -274,10 +327,10 @@ private struct PreviewUnavailableView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
             DiagnosticText(title)
-                .font(.caption)
+                .font(Ojo.Style.note)
                 .fontWeight(.semibold)
             DiagnosticText(message)
-                .font(.caption2)
+                .font(Ojo.Style.note)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
@@ -286,217 +339,64 @@ private struct PreviewUnavailableView: View {
     }
 }
 
-private struct ReadinessView: View {
-    @Bindable var state: AppState
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 10, height: 10)
-                DiagnosticText(title)
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                Spacer()
-                if let app = state.detectedCallApp {
-                    Label(app, systemImage: "video.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            DiagnosticText(message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-
-            if let score = state.preCallQualityScore, let label = state.preCallQualityLabel {
-                DiagnosticText("\(label.capitalized) \(score)")
-                    .font(.caption2)
-                    .foregroundStyle(score >= 88 ? .green : .secondary)
-            }
-        }
-    }
-
-    private var title: String {
-        switch state.preCallState?.lowercased() {
-        case "green": return "Ready for video"
-        case "yellow": return "Needs adjustment"
-        case "red": return "Blocked"
-        default: return "Ready check"
-        }
-    }
-
-    private var message: String {
-        if let issue = state.preCallQualityIssue {
-            return AppState.plainLanguage(issue)
-        }
-        if let reason = state.preCallReason {
-            return AppState.plainLanguage(reason)
-        }
-        return "Ojo will check framing, lighting, and camera settings before your call."
-    }
-
-    private var statusColor: Color {
-        switch state.preCallState?.lowercased() {
-        case "green": return .green
-        case "yellow": return .yellow
-        case "red": return .red
-        default: return .secondary
-        }
-    }
-}
-
-private struct PrimaryActionsView: View {
-    @Bindable var state: AppState
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                Task { await state.meetingReadyNow() }
-            } label: {
-                Label("Make Me Look Good", systemImage: "sparkles")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(isBusy)
-
-            HStack(spacing: 8) {
-                Button {
-                    Task { await state.checkNow() }
-                } label: {
-                    Label("Check", systemImage: "checkmark.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .disabled(isBusy)
-
-                if let action = recommendedAction {
-                    Button {
-                        Task { await runRecommendedAction(action) }
-                    } label: {
-                        Label(action.title, systemImage: action.icon)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(isBusy)
-                }
-            }
-
-            if state.isChecking || state.isCalibrating || state.isDeepRepairing || state.isMeetingReadyRunning {
-                ProgressView(progressLabel)
-                    .controlSize(.small)
-            }
-
-            if let summary = state.lightingPlanSummary {
-                DiagnosticText(summary)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private var isBusy: Bool {
-        state.currentDevice == nil
-            || state.isChecking
-            || state.isCalibrating
-            || state.isDeepRepairing
-            || state.isMeetingReadyRunning
-    }
-
-    private var progressLabel: String {
-        if state.isMeetingReadyRunning { return "Making you look good..." }
-        if state.isDeepRepairing { return "Repairing..." }
-        if state.isCalibrating { return "Calibrating..." }
-        return "Checking..."
-    }
-
-    private struct RecommendedAction {
-        let title: String
-        let icon: String
-        let kind: Kind
-
-        enum Kind {
-            case framing
-            case lighting
-            case background
-        }
-    }
-
-    private var recommendedAction: RecommendedAction? {
-        let issue = (state.preCallQualityIssues + [state.preCallReason ?? ""])
-            .joined(separator: " ")
-            .lowercased()
-
-        if issue.contains("face too high")
-            || issue.contains("face too low")
-            || issue.contains("too far")
-            || issue.contains("face too small")
-            || issue.contains("face too large") {
-            return RecommendedAction(title: "Fix Framing", icon: "scope", kind: .framing)
-        }
-        if issue.contains("background") {
-            return RecommendedAction(title: "Improve Background", icon: "lightbulb.2", kind: .background)
-        }
-        if state.preCallState?.lowercased() == "yellow" || state.preCallState?.lowercased() == "red" {
-            return RecommendedAction(title: "Studio Lighting", icon: "theatermasks", kind: .lighting)
-        }
-        return nil
-    }
-
-    private func runRecommendedAction(_ action: RecommendedAction) async {
-        switch action.kind {
-        case .framing:
-            await state.applyFramingRecommendation()
-        case .lighting:
-            await state.applyProductionLighting()
-        case .background:
-            await state.applyBackgroundFix()
-        }
-    }
-}
 
 // Camera sliders and calibration/advanced controls. Lights and curtains
 // moved out of this disclosure (2026-09-03) onto the main popover screen —
 // see MenuContentView.body. This stays collapsed by default because Ryan
 // should not need to open it before an ordinary call.
-private struct FineTuneView: View {
+private struct MoreToolsView: View {
     @Bindable var state: AppState
-    @State private var isExpanded = false
+    let back: () -> Void
     @State private var section: FineTuneSection = .camera
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            VStack(alignment: .leading, spacing: 10) {
-                Picker("", selection: $section) {
-                    ForEach(FineTuneSection.allCases, id: \.self) { item in
-                        Label(item.title, systemImage: item.icon)
-                            .tag(item)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Button(action: back) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left").font(.system(size: 12, weight: .semibold))
+                        DiagnosticText("Back")
                     }
+                    .font(Ojo.Style.chip)
+                    .contentShape(Rectangle())
                 }
-                .pickerStyle(.segmented)
-
-                switch section {
-                case .camera:
-                    CameraControlsView(state: state)
-                        .frame(maxHeight: 260)
-                case .advanced:
-                    AdvancedView(state: state)
-                }
-            }
-            .padding(.top, 8)
-        } label: {
-            HStack {
-                DiagnosticText("Camera & More")
-                    .font(.headline)
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .accessibilityIdentifier("more-back")
+                Spacer()
+                DiagnosticText("More tools")
+                    .font(Ojo.Style.heading)
                 Spacer()
                 DiagnosticText("\(state.panTiltText) · \(state.zoomText)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(Ojo.Style.note).foregroundStyle(.secondary)
             }
+            .padding(.horizontal, Ojo.Space.page)
+            .padding(.top, Ojo.Space.page)
+
+            Picker("", selection: $section) {
+                ForEach(FineTuneSection.allCases, id: \.self) { item in
+                    Label(item.title, systemImage: item.icon)
+                        .tag(item)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, Ojo.Space.page)
+            .padding(.top, 12)
+
+            ScrollView {
+                Group {
+                    switch section {
+                    case .camera:
+                        CameraControlsView(state: state)
+                    case .advanced:
+                        AdvancedView(state: state)
+                    }
+                }
+                .padding(.horizontal, Ojo.Space.page)
+                .padding(.vertical, 12)
+            }
+            .frame(maxHeight: .infinity, alignment: .top)
         }
     }
 
@@ -507,14 +407,14 @@ private struct FineTuneView: View {
         var title: String {
             switch self {
             case .camera: return "Camera"
-            case .advanced: return "More"
+            case .advanced: return "Tools"
             }
         }
 
         var icon: String {
             switch self {
             case .camera: return "camera"
-            case .advanced: return "gearshape"
+            case .advanced: return "wrench.and.screwdriver"
             }
         }
     }
@@ -526,13 +426,13 @@ private struct AdvancedView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             DiagnosticText(state.notificationStatus)
-                .font(.caption2)
+                .font(Ojo.Style.note)
                 .foregroundStyle(.secondary)
             DiagnosticText(state.browserAutomationStatus)
-                .font(.caption2)
+                .font(Ojo.Style.note)
                 .foregroundStyle(.secondary)
             DiagnosticText(state.callActivityReason)
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(Ojo.Style.note).foregroundStyle(.secondary)
 
             HStack {
                 Button("Refresh") {
@@ -654,7 +554,7 @@ private struct CompositionOverlayView: View {
 
     private func hintLabel(_ text: String) -> some View {
         DiagnosticText(text)
-            .font(.caption2)
+            .font(Ojo.Style.note)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(.black.opacity(0.55), in: Capsule())
