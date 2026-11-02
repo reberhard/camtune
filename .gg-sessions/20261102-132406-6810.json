@@ -1,0 +1,16 @@
+{
+  "schema": "gg-session-lease.v1",
+  "branch": "session/gg-mini/20261102-132406-6810/ojo-afternoon-light",
+  "repo": "camtune",
+  "host": "gg-mini",
+  "session_id": "20261102-132406-6810",
+  "purpose": "ojo-afternoon-light",
+  "paths": [
+    "CamTuneApp/"
+  ],
+  "worktree": "/Users/eberhard/gg-worktrees/camtune/20261102-132406-6810",
+  "base": "1af59e9393f0569190c3142b92442ef0c7d3c006",
+  "created_at": "2026-11-02T19:24:09+00:00",
+  "status": "active",
+  "agent": ""
+}
