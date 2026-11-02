@@ -627,8 +627,26 @@ def detect_imagesnap_cameras():
     return cameras
 
 
+IPHONE_CAMERA_ID = "iphone:continuity"
+
+
+def is_iphone_camera(name):
+    """Continuity Camera devices are named like "Ryan's iPhone 16 (2025) Camera"."""
+    return bool(name) and "iphone" in name.lower()
+
+
 def detect_camera(preferred=None):
-    """Auto-detect a UVC camera. Returns (name, vendor, product) or exits."""
+    """Pick the camera. Returns (name, vendor, product) or exits.
+
+    Since 2026-11-02 the iPhone (Continuity Camera) is the primary camera
+    (specs/ojo.md Camera Policy): with no --camera, an available iPhone wins and
+    comes back capture-only (vendor/product None). A UVC camera (Brio) is the
+    fallback when the phone is not connected.
+    """
+    if not preferred:
+        iphones = [n for n in detect_imagesnap_cameras() if is_iphone_camera(n)]
+        if iphones:
+            return iphones[0], None, None
     try:
         output = uvcc("devices")
         devices = json.loads(output) if output else []
@@ -844,13 +862,17 @@ def capture_frame(camera_name, path=CAPTURE_PATH, source="screen", warmup_secs=W
     # below the native caller's 30s budget so it can report the actual cause.
     with tempfile.TemporaryDirectory(prefix="ojo-capture-", dir=os.path.dirname(os.path.abspath(path))) as directory:
         fresh_path = os.path.join(directory, "frame.png")
+        # Measured 2026-11-02: an iPhone (Continuity Camera) capture with a 3 s
+        # warmup takes ~8 s end to end because the phone must wake and start
+        # streaming; the Brio takes ~4 s. 20 s still fits the 30 s native budget.
+        limit = 20 if is_iphone_camera(camera_name) else 8
         try:
             result = subprocess.run(
                 ["imagesnap", "-d", camera_name, "-w", str(warmup_secs), fresh_path],
-                capture_output=True, text=True, timeout=8,
+                capture_output=True, text=True, timeout=limit,
             )
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("Camera capture timed out after 8 seconds. Check Ojo camera permission or another camera app.") from exc
+            raise RuntimeError(f"Camera capture timed out after {limit} seconds. Check Ojo camera permission or another camera app.") from exc
         if result.returncode != 0 or not os.path.isfile(fresh_path) or os.path.getsize(fresh_path) == 0:
             print(f"Failed to capture a fresh camera frame: {result.stderr}", file=sys.stderr)
             return False
@@ -1530,6 +1552,9 @@ def _run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
         light_status = {}
     capture_path = getattr(args, "capture_path", CAPTURE_PATH)
     warmup_secs = getattr(args, "warmup_seconds", 1)
+    if is_iphone_camera(camera_name):
+        # Continuity Camera has to wake the phone and start streaming first.
+        warmup_secs = max(warmup_secs, 3)
 
     if not capture_frame(camera_name, capture_path, source="camera", warmup_secs=warmup_secs):
         raise RuntimeError("unable to capture raw camera frame")
@@ -1545,7 +1570,11 @@ def _run_pre_call_check(args, camera_name, profile_path=DEFAULT_PROFILE_PATH):
     )
     scene["measured_at"] = captured_at
     scene["camera_id"] = getattr(args, "camera_identity", None)
-    scene["camera_validated"] = camera_validated(scene["camera_id"])
+    if is_iphone_camera(camera_name):
+        scene["camera_kind"] = "iphone"
+        scene["camera_validated"] = False   # nothing to calibrate on the phone
+    else:
+        scene["camera_validated"] = camera_validated(scene["camera_id"])
     scene["trigger"] = getattr(args, "trigger", "manual")
     # Reachability probes are not actuator readback; never promote skipped or
     # legacy plain-text probes to confirmed physical state.
@@ -2580,7 +2609,8 @@ def main():
     check_dependencies(require_claude=args.command not in ("check", "calibrate", "profiles"))
 
     camera_name, vendor, product = detect_camera(preferred=args.camera)
-    args.camera_identity = f"camera:{vendor}:{product}" if vendor and product else None
+    args.camera_identity = (f"camera:{vendor}:{product}" if vendor and product
+                            else IPHONE_CAMERA_ID if is_iphone_camera(camera_name) else None)
 
     if args.command == "check":
         cmd_check(args, camera_name)

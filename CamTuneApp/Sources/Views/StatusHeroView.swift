@@ -53,17 +53,20 @@ struct StatusHeroView: View {
                     .transition(.opacity)
                 } else {
                     HStack(spacing: 10) {
-                        Button {
-                            Task { await state.meetingReadyNow() }
-                        } label: {
-                            HStack(spacing: 7) {
-                                Image(systemName: "sparkles")
-                                DiagnosticText("Make Me Look Good")
+                        // Make Me Look Good adjusts the Brio; with the iPhone it has nothing to move.
+                        if !state.usingIPhone {
+                            Button {
+                                Task { await state.meetingReadyNow() }
+                            } label: {
+                                HStack(spacing: 7) {
+                                    Image(systemName: "sparkles")
+                                    DiagnosticText("Make Me Look Good")
+                                }
                             }
+                            .buttonStyle(OjoPrimaryButtonStyle())
+                            .disabled(!state.canPrepareScene || state.currentDevice == nil)
+                            .accessibilityIdentifier("make-me-look-good")
                         }
-                        .buttonStyle(OjoPrimaryButtonStyle())
-                        .disabled(!state.canPrepareScene || state.currentDevice == nil)
-                        .accessibilityIdentifier("make-me-look-good")
 
                         Button {
                             Task { await state.checkNow() }
@@ -71,8 +74,8 @@ struct StatusHeroView: View {
                             DiagnosticText("Check")
                         }
                         .buttonStyle(OjoSecondaryButtonStyle())
-                        .frame(width: 88)
-                        .disabled(state.currentDevice == nil)
+                        .frame(maxWidth: state.usingIPhone ? .infinity : 88)
+                        .disabled(state.activeCameraName == nil)
                         .accessibilityIdentifier("check-now")
                     }
                     .transition(.opacity)
@@ -125,6 +128,10 @@ struct StatusHeroView: View {
     }
 
     private var footnote: String? {
+        if state.usingIPhone, !isBusy, state.statusMessage?.isEmpty ?? true {
+            if let checked = state.preCallLastChecked, level != nil { return "Checked " + Self.relative(checked) + " · iPhone camera" }
+            return "iPhone camera · Ojo checks the picture and runs your lights and curtains"
+        }
         if let note = state.scheduledNote, !isBusy { return note }
         if let message = state.statusMessage, !message.isEmpty, !isBusy { return Self.plainStatus(message) }
         // One line: when it was checked, or what the button will and will not touch.

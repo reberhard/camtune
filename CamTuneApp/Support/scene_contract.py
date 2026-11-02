@@ -65,9 +65,15 @@ def assess(scene, now=None):
 
     camera = scene.get("camera_id")
     camera_fresh = fresh(scene.get("measured_at"), now)
-    camera_ok = camera and camera_fresh and scene.get("camera_validated") is True
+    # 2026-11-02: Ryan uses only the iPhone (Continuity Camera). macOS exposes no
+    # exposure, white balance, zoom or pan/tilt control for it, so there is no
+    # calibration receipt to require; the phone adjusts itself. Framing problems
+    # are reported as something to fix by moving the phone (specs/ojo.md Camera Policy).
+    iphone = scene.get("camera_kind") == "iphone"
+    camera_ok = camera and camera_fresh and (iphone or scene.get("camera_validated") is True)
     put("camera", "green" if camera_ok else "unknown",
-        "fresh validated camera frame" if camera_ok else "camera identity missing" if not camera
+        ("fresh iPhone camera frame" if iphone else "fresh validated camera frame") if camera_ok
+        else "camera identity missing" if not camera
         else "camera frame stale" if not camera_fresh else "camera calibration receipt missing or mismatched")
     count = scene.get("face_count")
     if type(count) is not int or count < 0:
@@ -89,7 +95,8 @@ def assess(scene, now=None):
                 framing.append(below)
             elif value > high:
                 framing.append(above)
-        put("framing", "yellow" if framing else "green", ", ".join(framing) or "framing looks balanced")
+        hint = " (adjust the phone)" if iphone and framing else ""
+        put("framing", "yellow" if framing else "green", (", ".join(framing) + hint) or "framing looks balanced")
     else:
         put("framing", "unknown", "one face rectangle overlapping the frame required")
 
@@ -124,8 +131,12 @@ def assess(scene, now=None):
         put("background", "green" if 10 <= separation <= 65 else "yellow",
             "face/background separation in range" if 10 <= separation <= 65 else "face/background separation needs adjustment")
     profile = scene.get("profile_status", "unknown")
-    put("profile", "green" if profile == "compatible" else "yellow" if profile in ("missing", "stale", "incompatible") else "unknown",
-        "accepted compatible profile" if profile == "compatible" else "profile " + str(profile))
+    if iphone:
+        # Saved profiles are Brio UVC settings; nothing to apply to the phone.
+        put("profile", "not_applicable", "iPhone sets its own exposure and color")
+    else:
+        put("profile", "green" if profile == "compatible" else "yellow" if profile in ("missing", "stale", "incompatible") else "unknown",
+            "accepted compatible profile" if profile == "compatible" else "profile " + str(profile))
     lights = scene.get("actuator_status", "unknown")
     failed = scene.get("actuator_failed")
     failed = [str(d) for d in failed] if isinstance(failed, list) else []

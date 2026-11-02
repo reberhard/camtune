@@ -65,7 +65,7 @@ struct MenuContentView: View {
         .onAppear { startPreviewIfReady() }
         // The camera is discovered after the popover first appears; start once it is known.
         // Starting earlier raises a spurious "could not be matched" error.
-        .onChange(of: state.currentDevice?.name) { _, _ in startPreviewIfReady() }
+        .onChange(of: state.activeCameraName) { _, _ in startPreviewIfReady() }
         .onDisappear {
             if !state.isOptimizing && !state.isChecking && !state.isCalibrating
                 && !state.isDeepRepairing && !state.isMeetingReadyRunning {
@@ -75,7 +75,7 @@ struct MenuContentView: View {
     }
 
     private func startPreviewIfReady() {
-        guard state.currentDevice != nil else { return }
+        guard state.activeCameraName != nil else { return }
         state.startPreview()
     }
 
@@ -107,10 +107,18 @@ struct MenuContentView: View {
         OjoCard(padding: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 preview
-                QuickFramingControlsView(state: state)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                if !state.canAdjustComposition {
+                if state.usingIPhone {
+                    // The phone frames and exposes itself (Center Stage); Ojo cannot move it.
+                    DiagnosticText("The iPhone frames itself. To reframe, move the phone.")
+                        .font(Ojo.Style.note).foregroundStyle(.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                } else {
+                    QuickFramingControlsView(state: state)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                }
+                if !state.usingIPhone && !state.canAdjustComposition {
                     DiagnosticText("Pan and tilt need more zoom, or aren't calibrated for this camera yet.")
                         .font(Ojo.Style.note).foregroundStyle(.secondary)
                         .padding(.horizontal, 14)
@@ -130,7 +138,7 @@ struct MenuContentView: View {
                 Image(systemName: "web.camera")
                     .font(.system(size: 12))
                     .foregroundStyle(.tertiary)
-                DiagnosticText(state.currentDevice?.name ?? "No camera found")
+                DiagnosticText(state.activeCameraName ?? "No camera found")
                     .font(Ojo.Style.note)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -147,7 +155,9 @@ struct MenuContentView: View {
                 .accessibilityIdentifier("room-refresh")
                 Menu {
                     Button("More tools…") { withAnimation(Ojo.spring) { page = .more } }
-                    Toggle("Keep camera ready (every 30 min, weekdays)", isOn: $state.keepCameraReady)
+                    if !state.usingIPhone {
+                        Toggle("Keep camera ready (every 30 min, weekdays)", isOn: $state.keepCameraReady)
+                    }
                     if let status = state.scheduledStatus {
                         Button(status) {}.disabled(true)
                     }

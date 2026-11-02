@@ -161,6 +161,7 @@ final class AppState {
     }
     var canPrepareScene: Bool { allowSceneRoomChanges ? roomPreparationAvailable : cameraPreparationAvailable }
     var preparationScope: String {
+        if usingIPhone { return "iPhone camera" }
         if !cameraPreparationAvailable { return "Camera calibration is required before automatic correction" }
         if !roomPreparationAvailable { return "Camera framing and exposure — automatic lighting still needs room calibration" }
         return allowSceneRoomChanges ? "Camera and measured room adjustments enabled" : "Camera framing and exposure — lights and curtains stay as you set them"
@@ -226,6 +227,14 @@ final class AppState {
     private var freshnessTask: Task<Void, Never>?
     static let sceneRepairEnabled = false
     var currentDevice: CameraDevice?
+    /// 2026-11-02: the iPhone (Continuity Camera) is the primary camera. It has no UVC
+    /// controls, so `currentDevice` (a UVC camera) stays nil while it is active and every
+    /// Brio-only action stays disabled through its existing `currentDevice` guard.
+    var iPhoneCameraName: String?
+    var usingIPhone: Bool { iPhoneCameraName != nil }
+    var activeCameraName: String? { iPhoneCameraName ?? currentDevice?.name }
+    static let iPhoneCameraID = "iphone:continuity"
+    static let iPhoneScheduleNote = "With the iPhone, Ojo checks when you press Check and 5 minutes before calendar calls"
     var currentSettings = UVCSettings()
     var ranges: [String: UVCRange] = [:]
     var savedProfileExists = ProfileService.exists()
@@ -367,6 +376,17 @@ final class AppState {
             Task { await refreshCurtainStatus() }
         }
 
+        if let phone = CameraCaptureService.findIPhoneCamera() {
+            if iPhoneCameraName != phone.localizedName { stopPreview() }
+            iPhoneCameraName = phone.localizedName
+            currentDevice = nil
+            scheduledStatus = Self.iPhoneScheduleNote
+            if error == "No UVC camera detected" { error = nil }
+            return
+        }
+        if iPhoneCameraName != nil { stopPreview() }
+        iPhoneCameraName = nil
+
         do {
             let devices = try await UVCService.listDevices()
             let brio = devices.filter { $0.name.localizedCaseInsensitiveContains("Brio") }
@@ -388,11 +408,23 @@ final class AppState {
     func startPreview() {
         guard captureSession == nil else { return }
         do {
-            if let selected = currentDevice, let avDevice = CameraCaptureService.findCamera(named: selected.name) {
+            let avDevice: AVCaptureDevice?
+            let cameraID: String
+            if usingIPhone {
+                avDevice = CameraCaptureService.findIPhoneCamera()
+                cameraID = Self.iPhoneCameraID
+            } else if let selected = currentDevice {
+                avDevice = CameraCaptureService.findCamera(named: selected.name)
+                cameraID = "camera:\(selected.vendor):\(selected.product)"
+            } else {
+                avDevice = nil
+                cameraID = ""
+            }
+            if let avDevice {
                 cameraService.sceneHandler = { [weak self] incoming in
                     guard let self else { return }
                     var scene = incoming
-                    scene.cameraID = "camera:\(selected.vendor):\(selected.product)"
+                    scene.cameraID = cameraID
                     self.lastScene = scene
                     self.lastSceneUpdatedAt = scene.measuredAt
                     self.refreshLivePreviewCheckIfNeeded(scene)
@@ -412,7 +444,9 @@ final class AppState {
                 }
                 writeState(previewActive: true)
             } else {
-                throw CameraCaptureService.CaptureError.setupFailed("The selected UVC camera could not be matched uniquely to a preview device")
+                throw CameraCaptureService.CaptureError.setupFailed(usingIPhone
+                    ? "The iPhone camera disconnected. Check that it is mounted and nearby."
+                    : "The selected UVC camera could not be matched uniquely to a preview device")
             }
         } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
@@ -619,7 +653,10 @@ final class AppState {
         var payload: [String: Any] = scene.photometry
         payload["measured_at"] = scene.measuredAt.timeIntervalSince1970
         payload["camera_id"] = scene.cameraID
-        if let data = try? Data(contentsOf:stage2ValidationURL), let receipt = try? JSONSerialization.jsonObject(with:data) as? [String:Any] {
+        if usingIPhone {
+            payload["camera_kind"] = "iphone"
+            payload["camera_validated"] = false   // nothing to calibrate on the phone
+        } else if let data = try? Data(contentsOf:stage2ValidationURL), let receipt = try? JSONSerialization.jsonObject(with:data) as? [String:Any] {
             let calibrated = ["face_x_per_pan", "face_y_per_tilt", "face_height_per_zoom"].allSatisfy { ((receipt[$0] as? NSNumber)?.doubleValue ?? 0) != 0 }
             payload["camera_validated"] = receipt["camera_id"] as? String == scene.cameraID && receipt["call_preview_parity"] as? Bool == true && !(receipt["validation_receipt"] as? String ?? "").isEmpty && calibrated && (receipt["pan_tilt_by_zoom"] as? [String:Any])?.isEmpty == false
         } else { payload["camera_validated"] = false }
@@ -996,6 +1033,12 @@ final class AppState {
 
     func runScheduledPrepare(policy: ScheduledPreparePolicy) async {
         guard keepCameraReady else { return }
+        // Ryan, 2026-11-02: with the iPhone, no timed camera checks. Each one would wake
+        // the phone and take its camera; pre-call-tuner.py checks 5 minutes before calendar calls.
+        if usingIPhone || CameraCaptureService.findIPhoneCamera() != nil {
+            scheduledStatus = Self.iPhoneScheduleNote
+            return
+        }
         let outcome = await scheduledOutcome(policy: policy)
         scheduledStatus = Self.describe(outcome, at: Date())
         Diagnostics.shared.record("scheduled_prepare", Self.label(outcome), context: [

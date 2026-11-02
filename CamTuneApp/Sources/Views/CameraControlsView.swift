@@ -19,6 +19,17 @@ struct CameraControlsView: View {
 
     private static let fovPresets = [90, 78, 65]
     var body: some View {
+        if state.usingIPhone {
+            DiagnosticText("The iPhone sets its own exposure, color and framing. macOS gives Ojo no controls for it. Use the Video Effects menu in the menu bar during a call for Center Stage, Portrait and Studio Light.")
+                .font(Ojo.Style.note).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            uvcControls
+        }
+    }
+
+    private var uvcControls: some View {
         ScrollView {
             VStack(spacing: 10) {
                 if !state.cameraControls.pending.isEmpty {
