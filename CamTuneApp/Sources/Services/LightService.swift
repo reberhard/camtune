@@ -18,6 +18,9 @@ struct LightScene: Identifiable, Sendable {
 }
 
 enum LightService {
+    /// Must match the scene name accepted by office-lights.py (gg PR #544).
+    static let callLightSceneID = "call-white"
+
     static let scenes: [LightScene] = [
         LightScene(id: "warm-white", name: "Warm White", icon: "sun.max"),
         LightScene(id: "soft-rose", name: "Soft Rose", icon: "paintpalette"),

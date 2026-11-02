@@ -21,13 +21,39 @@ private struct ScenesGrid: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 8) {
-            ForEach(LightService.scenes) { scene in
-                SceneTile(scene: scene) {
-                    room.light(scene.id, target: scene.id == "reading" ? "pie" : "all")
+        VStack(spacing: 8) {
+            callLightButton
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(LightService.scenes) { scene in
+                    SceneTile(scene: scene) {
+                        room.light(scene.id, target: scene.id == "reading" ? "pie" : "all")
+                    }
                 }
             }
         }
+    }
+
+    /// "Call Light": every lamp in white mode at 5000 K at its usual call brightness
+    /// (`call-white` in ~/gg/scripts/lib/ojo_controls.py). Measured 2026-11-02 on the
+    /// iPhone: removes the red cast the colour-mode scenes leave on Ryan's face.
+    /// pre-call-tuner applies the same scene 5 minutes before calendar calls.
+    private var callLightButton: some View {
+        Button { room.light(LightService.callLightSceneID, target: "all") } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "video").font(.system(size: 12, weight: .medium))
+                DiagnosticText("Call Light")
+            }
+            .font(Ojo.Style.chip)
+            .frame(maxWidth: .infinity, minHeight: 38)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(0.08))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("All lamps neutral white at their call brightness")
+        .accessibilityIdentifier("scene-call-white")
     }
 }
 
