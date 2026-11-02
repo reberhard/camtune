@@ -13,6 +13,20 @@ final class CameraCaptureService {
     private var device: AVCaptureDevice?
     var sceneHandler: ((SceneMetrics) -> Void)?
 
+    /// The iPhone over Continuity Camera, Ojo's primary camera since 2026-11-02
+    /// (specs/ojo.md Camera Policy). Nil when the phone is not connected, so callers
+    /// fall back to the Brio. Exactly one phone is required, as with the Brio.
+    nonisolated static func findIPhoneCamera() -> AVCaptureDevice? {
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.continuityCamera, .external], mediaType: .video, position: .unspecified)
+        let phones = discovery.devices.filter {
+            $0.deviceType == .continuityCamera || $0.localizedName.localizedCaseInsensitiveContains("iPhone")
+        }
+        // Desk View is a second Continuity device on the same phone; it is not a call camera.
+        let cameras = phones.filter { !$0.localizedName.localizedCaseInsensitiveContains("Desk View") }
+        return cameras.count == 1 ? cameras[0] : nil
+    }
+
     /// Find an external USB camera (e.g. Brio), falling back to built-in.
     nonisolated static func findCamera(named name: String? = nil) -> AVCaptureDevice? {
         var types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
