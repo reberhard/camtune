@@ -253,9 +253,36 @@ private struct LightRow: View {
 
 // MARK: - Curtains
 
+/// "Afternoon Light": Ryan's saved curtain positions, one click in the Curtains card.
+/// Captured from the live curtains on 2026-11-02 at 1:23 PM (left 24%, right 34%);
+/// right-click the button to save the current positions over it.
+enum AfternoonLight {
+    static let leftKey = "afternoonLightLeft"
+    static let rightKey = "afternoonLightRight"
+    static let defaultLeft = 24
+    static let defaultRight = 34
+
+    static func positions(_ defaults: UserDefaults = .standard) -> (left: Int, right: Int) {
+        ((defaults.object(forKey: leftKey) as? Int) ?? defaultLeft,
+         (defaults.object(forKey: rightKey) as? Int) ?? defaultRight)
+    }
+
+    static func save(left: Int, right: Int, _ defaults: UserDefaults = .standard) {
+        defaults.set(min(100, max(0, left)), forKey: leftKey)
+        defaults.set(min(100, max(0, right)), forKey: rightKey)
+    }
+
+    /// The motors settle within a few percent of the requested position.
+    static func matches(left: Int?, right: Int?, _ saved: (left: Int, right: Int)) -> Bool {
+        guard let left, let right else { return false }
+        return abs(left - saved.left) <= 4 && abs(right - saved.right) <= 4
+    }
+}
+
 private struct CurtainsCard: View {
     @Bindable var room: RoomControlService
     @State private var expanded = false
+    @State private var afternoon = AfternoonLight.positions()
     @State private var left = 100.0
     @State private var right = 100.0
 
@@ -283,8 +310,13 @@ private struct CurtainsCard: View {
         return nil
     }
 
+    private var isAfternoon: Bool {
+        !moving && AfternoonLight.matches(left: positions[0], right: positions[1], afternoon)
+    }
+
     private var caption: String {
         if moving { return "Moving…" }
+        if isAfternoon { return "Afternoon light" }
         if let current { return current.title == "Half" ? "Half open" : current.title }
         let known = positions
         guard known.allSatisfy({ $0 != nil }) else { return "Checking…" }
@@ -358,7 +390,11 @@ private struct CurtainsCard: View {
                 .animation(.snappy(duration: 0.2), value: current)
                 .padding(.horizontal, Ojo.Space.card)
                 .padding(.top, 8)
-                .padding(.bottom, 10)
+                .padding(.bottom, 6)
+
+                afternoonButton
+                    .padding(.horizontal, Ojo.Space.card)
+                    .padding(.bottom, 10)
 
                 if expanded {
                     VStack(alignment: .leading, spacing: 12) {
@@ -403,6 +439,38 @@ private struct CurtainsCard: View {
             // Commit on release: dragging must not send a motor command per pixel.
             CurtainSlider(value: value, label: title) { room.curtain("set", target: target, position: Int(value.wrappedValue)) }
         }
+    }
+
+    private var afternoonButton: some View {
+        Button {
+            room.curtain("set", target: "left", position: afternoon.left)
+            room.curtain("set", target: "right", position: afternoon.right)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "sun.max").font(.system(size: 12, weight: .medium))
+                DiagnosticText("Afternoon Light")
+            }
+            .font(Ojo.Style.chip)
+            .frame(maxWidth: .infinity, minHeight: 38)
+            .foregroundStyle(isAfternoon ? Color.white : Color.primary)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isAfternoon ? Color.accentColor : Color.primary.opacity(0.08))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(moving)
+        .help("Left \(afternoon.left)% · Right \(afternoon.right)%. Right-click to save the current curtains.")
+        .contextMenu {
+            Button("Save current curtains as Afternoon Light") {
+                guard let left = positions[0], let right = positions[1] else { return }
+                AfternoonLight.save(left: left, right: right)
+                afternoon = AfternoonLight.positions()
+            }
+            .disabled(positions.contains { $0 == nil } || moving)
+        }
+        .accessibilityIdentifier("curtain-afternoon-light")
     }
 
     private func apply(_ preset: Preset) {
