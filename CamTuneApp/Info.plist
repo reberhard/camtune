@@ -18,5 +18,7 @@
     <true/>
     <key>NSCameraUsageDescription</key>
     <string>Ojo needs camera access to show a live preview and run local pre-call scene checks.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Ojo controls the office lights and curtains on your local network.</string>
 </dict>
 </plist>
