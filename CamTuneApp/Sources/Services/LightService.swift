@@ -38,8 +38,6 @@ enum LightService {
         // inventions; the controller rejected them and the UI hid the error.
         LightFixture(id: "overheads", name: "Overhead Lights", ip: "", target: "overheads",
                      hue: 30, saturation: 5, brightness: 30),
-        LightFixture(id: "cafe", name: "Café Lamp", ip: "", target: "cafe",
-                     hue: 25, saturation: 20, brightness: 25),
         LightFixture(id: "pie", name: "Floor Lamp", ip: "", target: "pie",
                      hue: 35, saturation: 3, brightness: 45),
     ]

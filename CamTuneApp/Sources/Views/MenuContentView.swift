@@ -595,7 +595,7 @@ private struct SceneQualityPillsView: View {
                 .frame(width: 6, height: 6)
             DiagnosticText(label)
                 .foregroundStyle(.secondary)
-            DiagnosticText(value)
+            DiagnosticText(value, live: true)
                 .fontWeight(.medium)
         }
         .font(.system(size: 11))

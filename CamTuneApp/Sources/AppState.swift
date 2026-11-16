@@ -665,7 +665,7 @@ final class AppState {
         if let r = scene.photometry["red_balance"], let g = scene.photometry["green_balance"], let b = scene.photometry["blue_balance"] {
             payload["rgb_balance"] = [r, g, b]
         }
-        let ids = ["overhead-left", "overhead-right", "cafe", "pie", "curtain-left", "curtain-right"]
+        let ids = ["overhead-left", "overhead-right", "pie", "curtain-left", "curtain-right"]
         let rows = ids.map { room.devices[$0] }
         payload["actuator_failed"] = ids.filter { room.devices[$0]?.failed == true }
         payload["actuator_status"] = rows.contains { $0?.failed == true } ? "failed" :
@@ -1484,7 +1484,6 @@ final class AppState {
         statusMessage = "Adjusting background light..."
         do {
             try await LightService.turnOff(target: "overheads")
-            try await LightService.setCustomHSV(hue: 28, saturation: 18, brightness: 38, target: "cafe")
             try await LightService.setCustomHSV(hue: 35, saturation: 5, brightness: 55, target: "pie")
             lightingPlanSummary = "Background separation: key light down, warm practicals up."
             statusMessage = "Background light adjusted"
@@ -1509,7 +1508,6 @@ final class AppState {
         statusMessage = "Applying video lights..."
         do {
             try await LightService.setCustomHSV(hue: 30, saturation: 6, brightness: 26, target: "overheads")
-            try await LightService.setCustomHSV(hue: 28, saturation: 18, brightness: 34, target: "cafe")
             try await LightService.setCustomHSV(hue: 35, saturation: 4, brightness: 50, target: "pie")
             lightingPlanSummary = "Balanced video baseline: soft warm key light, practical key, neutral fill."
             statusMessage = "Video lights ready"
@@ -1539,12 +1537,6 @@ final class AppState {
                 saturation: plan.keyLight.saturation,
                 brightness: plan.keyLight.brightness,
                 target: "overheads"
-            )
-            try await LightService.setCustomHSV(
-                hue: plan.accent.hue,
-                saturation: plan.accent.saturation,
-                brightness: plan.accent.brightness,
-                target: "cafe"
             )
             try await LightService.setCustomHSV(
                 hue: plan.background.hue,
@@ -1658,11 +1650,6 @@ final class AppState {
                 lightFixtures[index].hue = plan.keyLight.hue
                 lightFixtures[index].saturation = plan.keyLight.saturation
                 lightFixtures[index].brightness = plan.keyLight.brightness
-                lightFixtures[index].isOn = true
-            case "cafe":
-                lightFixtures[index].hue = plan.accent.hue
-                lightFixtures[index].saturation = plan.accent.saturation
-                lightFixtures[index].brightness = plan.accent.brightness
                 lightFixtures[index].isOn = true
             case "pie":
                 lightFixtures[index].hue = plan.background.hue
