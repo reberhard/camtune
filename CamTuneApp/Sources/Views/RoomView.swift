@@ -105,7 +105,7 @@ private struct SceneTile: View {
 
 private struct LightsCard: View {
     @Bindable var room: RoomControlService
-    private let targets = ["overheads", "cafe", "pie"]
+    private let targets = ["overheads", "pie"]
 
     var body: some View {
         OjoCard(padding: 0) {

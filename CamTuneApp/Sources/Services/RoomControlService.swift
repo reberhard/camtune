@@ -40,12 +40,14 @@ struct RoomDevice: Sendable {
 @MainActor @Observable
 final class RoomControlService {
     static let lightGroups = ["overheads": ["overhead-left", "overhead-right"],
-        "cafe": ["cafe"], "pie": ["pie"],
-        "all": ["overhead-left", "overhead-right", "cafe", "pie"]]
+        "pie": ["pie"],
+        // The café bulb is off the network by Ryan's choice (2026-11-11), so
+        // Ojo neither controls nor polls it.
+        "all": ["overhead-left", "overhead-right", "pie"]]
     static let curtainGroups = ["left": ["curtain-left"], "right": ["curtain-right"],
         "both": ["curtain-left", "curtain-right"]]
     static let deviceNames = ["overhead-left": "Left overhead", "overhead-right": "Right overhead",
-        "cafe": "Café lamp", "pie": "Floor lamp", "curtain-left": "Left curtain", "curtain-right": "Right curtain"]
+        "pie": "Floor lamp", "curtain-left": "Left curtain", "curtain-right": "Right curtain"]
     var devices: [String: RoomDevice] = [:]
     var isRefreshing = false
     var intentGeneration = 0
