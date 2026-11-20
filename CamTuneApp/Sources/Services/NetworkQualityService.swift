@@ -17,9 +17,11 @@ struct NetworkSample: Codable, Equatable, Sendable {
 
     enum Level: String { case good, shaky, poor }
 
+    /// Delay counts too (2026-11-20 call on a roaming hotspot: steady 180 ms, low jitter):
+    /// over 150 ms people talk over each other, over 300 ms conversation breaks down.
     var level: Level {
-        if lossPct >= 5 || jitterMs >= 30 { return .poor }
-        if lossPct >= 1 || jitterMs >= 10 { return .shaky }
+        if lossPct >= 5 || jitterMs >= 30 || latencyMs >= 300 { return .poor }
+        if lossPct >= 1 || jitterMs >= 10 || latencyMs >= 150 { return .shaky }
         return .good
     }
 
@@ -27,8 +29,14 @@ struct NetworkSample: Codable, Equatable, Sendable {
     var verdict: String {
         switch level {
         case .good: return "Good"
-        case .shaky: return lossPct >= 1 ? "Shaky: some packets lost" : "Shaky: expect some freezes"
-        case .poor: return lossPct >= 5 ? "Poor: packets being lost" : "Poor: audio may break up"
+        case .shaky:
+            if lossPct >= 1 { return "Shaky: some packets lost" }
+            if jitterMs < 10 { return "Shaky: noticeable delay" }
+            return "Shaky: expect some freezes"
+        case .poor:
+            if lossPct >= 5 { return "Poor: packets being lost" }
+            if jitterMs < 30 { return "Poor: long delay" }
+            return "Poor: audio may break up"
         }
     }
 

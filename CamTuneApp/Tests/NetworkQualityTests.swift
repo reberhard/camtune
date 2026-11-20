@@ -79,3 +79,12 @@ round-trip min/avg/max/stddev = 10.0/11.5/13.0/1.1 ms
     #expect(AppState.plainError(raw, usingIPhone: false) == "Ojo can't see a camera. Check the webcam is plugged in.")
     #expect(AppState.plainError("Command failed (exit 3): bulb offline", usingIPhone: true) == "bulb offline")
 }
+
+@Test func steadyButLongDelayIsNotGood() {
+    let roaming = NetworkSample(jitterMs: 4, latencyMs: 180, lossPct: 0, measuredAt: Date())
+    #expect(roaming.level == .shaky)
+    #expect(roaming.verdict == "Shaky: noticeable delay")
+    let far = NetworkSample(jitterMs: 4, latencyMs: 320, lossPct: 0, measuredAt: Date())
+    #expect(far.level == .poor)
+    #expect(far.verdict == "Poor: long delay")
+}

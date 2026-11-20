@@ -25,7 +25,7 @@ The popover is a product, not a settings panel. Keep it that way.
 - **Connection line** (2026-11-20): one row on the status card, `Connection ● 6 ms jitter
   Good`. Jitter is the call-quality number that moved in the office tests (bandwidth, latency
   and loss were all fine). Green under 10 ms, orange 10-30, red over 30; loss of 1% or more
-  overrides. Measured to Google's STUN server every 10 s while the popover is open, every 30 s
+  and delay over 150 ms (orange) or 300 ms (red) also count. Measured to Google's STUN server every 10 s while the popover is open, every 30 s
   otherwise, logged to `~/.config/camtune/network-quality.jsonl` (bounded, 2 MB).
 - **Errors in words.** The banner shows `AppState.plainError`, not raw command output; the
   raw text stays in the journal.
