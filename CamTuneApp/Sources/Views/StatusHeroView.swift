@@ -81,6 +81,10 @@ struct StatusHeroView: View {
                     .transition(.opacity)
                 }
 
+                if let network = state.network {
+                    ConnectionRow(sample: network)
+                }
+
                 if let footnote {
                     DiagnosticText(footnote)
                         .font(Ojo.Style.note)
@@ -106,18 +110,52 @@ struct StatusHeroView: View {
         return "Checking your camera…"
     }
 
-    private var level: String? { state.preCallState?.lowercased() }
+    /// What the card is about, before colour. "Not checked yet" was the first thing Ryan saw on
+    /// most opens (982 times in the 2026-11-20 diagnostics); an empty chair or a waking camera
+    /// is not a problem to shout about.
+    private enum Mood { case result(String), looking, away, cameraSilent, idle }
+
+    private var mood: Mood {
+        let raw = state.preCallState?.lowercased()
+        // No face is "sit in view", not red: nothing is wrong with an empty chair.
+        if state.lastScene?.faceCount == 0, state.hasLiveResult { return .away }
+        if let raw, ["green", "yellow", "red"].contains(raw) { return .result(raw) }
+        if state.captureSession != nil, !state.hasLiveResult {
+            return state.previewWaitExpired ? .cameraSilent : .looking
+        }
+        return .idle
+    }
+
+    private var level: String? {
+        if case .result(let raw) = mood { return raw }
+        return nil
+    }
 
     private var title: String {
-        switch level {
-        case "green": return "You look good"
-        case "yellow": return "Almost there"
-        case "red": return "Needs attention"
-        default: return "Not checked yet"
+        switch mood {
+        case .result("green"): return "You look good"
+        case .result("yellow"): return "Almost there"
+        case .result: return "Needs attention"
+        case .looking: return "Looking…"
+        case .away: return "Sit in view"
+        case .cameraSilent: return "Camera is quiet"
+        case .idle: return "Ready when you are"
         }
     }
 
     private var subtitle: String {
+        switch mood {
+        case .looking:
+            return state.usingIPhone ? "Waking the iPhone camera." : "Starting the camera."
+        case .away:
+            return "Ojo checks how you look as soon as it sees you."
+        case .cameraSilent:
+            return state.usingIPhone ? "No picture yet. Wake the phone or check it's on its mount." : "No picture yet. Check the webcam."
+        case .idle:
+            return "Tap Check to see how you look."
+        case .result:
+            break
+        }
         if level == "green" {
             return "Camera, framing and lighting all check out."
         }
@@ -142,11 +180,14 @@ struct StatusHeroView: View {
     }
 
     private var symbol: String {
-        switch level {
-        case "green": return "checkmark.circle.fill"
-        case "yellow": return "exclamationmark.circle.fill"
-        case "red": return "xmark.octagon.fill"
-        default: return "video.circle.fill"
+        switch mood {
+        case .result("green"): return "checkmark.circle.fill"
+        case .result("yellow"): return "exclamationmark.circle.fill"
+        case .result: return "xmark.octagon.fill"
+        case .looking: return "eye.circle.fill"
+        case .away: return "person.crop.circle"
+        case .cameraSilent: return "video.slash.fill"
+        case .idle: return "video.circle.fill"
         }
     }
 
@@ -187,5 +228,37 @@ struct StatusHeroView: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+
+/// One line on the card: the call-quality number, its colour and a plain verdict.
+private struct ConnectionRow: View {
+    let sample: NetworkSample
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            DiagnosticText("Connection")
+                .font(Ojo.Style.chipSmall)
+                .foregroundStyle(.secondary)
+            DiagnosticText(sample.jitterLabel, live: true)
+                .font(Ojo.Style.chipSmall)
+            Spacer(minLength: 4)
+            DiagnosticText(sample.verdict, live: true)
+                .font(Ojo.Style.note)
+                .foregroundStyle(sample.level == .good ? .secondary : color)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("connection-quality")
+    }
+
+    private var color: Color {
+        switch sample.level {
+        case .good: return .green
+        case .shaky: return .orange
+        case .poor: return .red
+        }
     }
 }

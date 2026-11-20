@@ -130,6 +130,14 @@ final class AppState {
     let room = RoomControlService()
     let cameraControls = CameraControlService()
     var callActivityReason = "Call activity not verified"
+    /// Latest video-call network reading (NetworkQualityService); nil until the first probe.
+    var network: NetworkSample?
+    private var networkTask: Task<Void, Never>?
+    /// The popover's preview start, so the status card can say "Looking…" instead of
+    /// "Not checked yet" while the iPhone camera wakes (2026-11-20 UX review).
+    var previewStartedAt: Date?
+    var hasLiveResult = false
+    var previewWaitExpired = false
     var allowSceneRoomChanges = false
     var activePreparationID: UUID?
     var preparationOutcomes: [String] = []
@@ -363,6 +371,7 @@ final class AppState {
 
     func startUp() async {
         room.start()
+        startNetworkMonitor()
         restoreCallObservation()
         NotificationService.requestAuthorization()
         await refreshPermissionStatus()
@@ -407,6 +416,9 @@ final class AppState {
     /// Start the camera preview (called when menu bar popover opens).
     func startPreview() {
         guard captureSession == nil else { return }
+        previewStartedAt = Date()
+        hasLiveResult = false
+        previewWaitExpired = false
         do {
             let avDevice: AVCaptureDevice?
             let cameraID: String
@@ -435,10 +447,19 @@ final class AppState {
                     while !Task.isCancelled {
                         do { try await Task.sleep(for: .seconds(1)) } catch { Diagnostics.shared.failure(error, action: #function); return }
                         guard let self else { return }
-                        if self.freshLiveScene == nil {
+                        // Frames arrive about once a second; one late frame used to flip
+                        // the card to "Not checked yet" and back (1,959 flips in the
+                        // 2026-11-20 diagnostics). Only a real outage clears the result.
+                        let lastFrame = self.lastSceneUpdatedAt ?? self.previewStartedAt ?? .distantPast
+                        if Date().timeIntervalSince(lastFrame) >= 8, self.preCallState != "unknown" {
                             self.assessmentGeneration = UUID()
                             self.preCallState = "unknown"
                             self.preCallReason = "Camera frame missing or stale"
+                            self.hasLiveResult = false
+                        }
+                        if !self.hasLiveResult, let started = self.previewStartedAt,
+                           Date().timeIntervalSince(started) >= 15 {
+                            self.previewWaitExpired = true
                         }
                     }
                 }
@@ -462,6 +483,9 @@ final class AppState {
         lastSceneUpdatedAt = nil
         preCallState = "unknown"
         preCallReason = "Camera preview stopped — scene not verified"
+        previewStartedAt = nil
+        hasLiveResult = false
+        previewWaitExpired = false
         guard captureSession != nil else { return }
         cameraService.stopSession()
         captureSession = nil
@@ -504,6 +528,13 @@ final class AppState {
 
     func checkNow(reason: String = "manual") async {
         guard !isChecking, !isCalibrating, !isDeepRepairing, !isMeetingReadyRunning else { return }
+        // The command-line check cannot see the iPhone while the preview holds it, and
+        // used to answer "No cameras detected". Give a waking phone a few seconds first.
+        if usingIPhone, captureSession != nil, freshLiveScene == nil {
+            for _ in 0..<6 where freshLiveScene == nil {
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
         if freshLiveScene != nil {
             isChecking = true
             // A fresh camera frame says nothing about six-day-old room
@@ -617,6 +648,8 @@ final class AppState {
                 preCallState = result["state"] as? String ?? "unknown"
                 preCallReason = result["reason"] as? String
                 preCallLastChecked = scene.measuredAt
+                hasLiveResult = true
+                previewWaitExpired = false
                 preCallQualityScore = nil
                 preCallQualityLabel = nil
                 let quality = result["quality"] as? [String: Any]
@@ -958,7 +991,7 @@ final class AppState {
     private var freshLiveScene: SceneMetrics? {
         guard let lastScene,
               let lastSceneUpdatedAt,
-              Date().timeIntervalSince(lastSceneUpdatedAt) < 2
+              Date().timeIntervalSince(lastSceneUpdatedAt) < 4
         else { return nil }
         return lastScene
     }
@@ -1114,6 +1147,42 @@ final class AppState {
             self.error = "Couldn't change the login setting: " + error.localizedDescription
         }
         loginItemEnabled = LoginItemService.isEnabled
+    }
+
+    // MARK: Connection
+
+    /// Probes call quality every 10 s while the popover is open and every 30 s otherwise,
+    /// logs each reading (network-quality.jsonl) and refreshes the call signal that the
+    /// root AWDL job reads. 20 ICMP packets per probe; nothing else on the network changes.
+    private func startNetworkMonitor() {
+        guard networkTask == nil else { return }
+        networkTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let inCall = NetworkQualityService.videoCallLikely()
+                NetworkQualityService.writeCallSignal(inCall: inCall)
+                if let sample = await NetworkQualityService.measure() {
+                    NetworkQualityService.append(sample, inCall: inCall)
+                    self?.network = sample
+                }
+                let open = self?.captureSession != nil
+                try? await Task.sleep(for: .seconds(open ? 10 : 30))
+            }
+        }
+    }
+
+    /// Engineering errors in words Ryan can act on; the raw text stays in the journal.
+    nonisolated static func plainError(_ message: String, usingIPhone: Bool) -> String {
+        var text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let range = text.range(of: #"^Command failed \(exit \d+\): "#, options: .regularExpression) {
+            text.removeSubrange(range)
+        }
+        if text.contains("No cameras detected") || text.contains("No UVC camera detected") {
+            return usingIPhone
+                ? "Ojo can't reach the iPhone camera. Wake the phone and check it's on its mount."
+                : "Ojo can't see a camera. Check the webcam is plugged in."
+        }
+        if text.lowercased().contains("timed out") { return "That took too long. Try again." }
+        return text
     }
 
     private func startAutomaticChecks() {

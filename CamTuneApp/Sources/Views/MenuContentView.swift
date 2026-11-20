@@ -81,9 +81,9 @@ struct MenuContentView: View {
 
     private func errorBanner(_ message: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
-            DiagnosticText(message)
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(.orange)
+            DiagnosticText(AppState.plainError(message, usingIPhone: state.usingIPhone))
                 .font(Ojo.Style.subtitle)
                 .fixedSize(horizontal: false, vertical: true)
                 .lineLimit(4)
@@ -95,11 +95,11 @@ struct MenuContentView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: Ojo.Radius.control, style: .continuous)
-                .fill(Color.red.opacity(0.10))
+                .fill(Color.orange.opacity(0.10))
         )
         .overlay(
             RoundedRectangle(cornerRadius: Ojo.Radius.control, style: .continuous)
-                .strokeBorder(Color.red.opacity(0.25), lineWidth: 1)
+                .strokeBorder(Color.orange.opacity(0.25), lineWidth: 1)
         )
     }
 
@@ -202,8 +202,11 @@ struct MenuContentView: View {
                     }
                 }
                 .overlay(alignment: .bottomLeading) {
-                    SceneQualityPillsView(scene: state.lastScene)
-                        .padding(10)
+                    // Three "--" pills said nothing; show them only once a face is measured.
+                    if state.lastScene?.faceCenterY != nil {
+                        SceneQualityPillsView(scene: state.lastScene)
+                            .padding(10)
+                    }
                 }
         } else {
             Rectangle()
