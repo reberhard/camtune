@@ -18,6 +18,17 @@ The popover is a product, not a settings panel. Keep it that way.
 - **Fit.** The popover must not scroll in its default state on a normal desktop display
   (height 930 pt, capped to the screen). Check changes with a window-scoped capture
   (`screencapture -l <window id>`), never a full-screen one.
+- **The status card never opens on a problem it hasn't seen** (2026-11-20). While the camera
+  wakes it says "Looking…"; an empty chair is "Sit in view", not red; with no live picture
+  after 15 s it says "Camera is quiet". "Not checked yet" is gone: it was the first thing
+  Ryan saw on most opens. One late frame no longer clears a result; only 8 s without frames does.
+- **Connection line** (2026-11-20): one row on the status card, `Connection ● 6 ms jitter
+  Good`. Jitter is the call-quality number that moved in the office tests (bandwidth, latency
+  and loss were all fine). Green under 10 ms, orange 10-30, red over 30; loss of 1% or more
+  overrides. Measured to Google's STUN server every 10 s while the popover is open, every 30 s
+  otherwise, logged to `~/.config/camtune/network-quality.jsonl` (bounded, 2 MB).
+- **Errors in words.** The banner shows `AppState.plainError`, not raw command output; the
+  raw text stays in the journal.
 - **Start the preview only after the camera is known** (`currentDevice != nil`); starting earlier
   raises a spurious "could not be matched" error.
 
