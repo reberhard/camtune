@@ -94,8 +94,9 @@ enum NetworkQualityService {
     static func append(_ sample: NetworkSample, inCall: Bool, to url: URL = logURL) {
         let row: [String: Any] = [
             "ts": ISO8601DateFormatter().string(from: sample.measuredAt),
-            "jitter_ms": (sample.jitterMs * 10).rounded() / 10,
-            "latency_ms": (sample.latencyMs * 10).rounded() / 10,
+            // Decimal, not Double: JSONSerialization prints 0.6 as 0.59999999999999998.
+            "jitter_ms": Decimal(string: String(format: "%.1f", sample.jitterMs)) ?? 0,
+            "latency_ms": Decimal(string: String(format: "%.1f", sample.latencyMs)) ?? 0,
             "loss_pct": sample.lossPct,
             "level": sample.level.rawValue,
             "in_call": inCall,

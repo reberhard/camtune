@@ -54,7 +54,8 @@ round-trip min/avg/max/stddev = 10.0/11.5/13.0/1.1 ms
     let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
     #expect(lines.count == 2)
     #expect(lines[0].contains("\"in_call\":true"))
-    #expect(lines[0].contains("\"jitter_ms\":6"))
+    #expect(lines[0].contains("\"jitter_ms\":6,"))
+    #expect(lines[0].contains("\"latency_ms\":10.2,"))
     // Oversized log keeps only its newer half, starting on a whole line.
     let filler = String(repeating: "{\"x\":1}\n", count: NetworkQualityService.maxLogBytes / 8 + 10)
     try filler.write(to: url, atomically: true, encoding: .utf8)
