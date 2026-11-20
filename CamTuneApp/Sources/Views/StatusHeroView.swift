@@ -166,9 +166,10 @@ struct StatusHeroView: View {
     }
 
     private var footnote: String? {
+        // The footer already names the camera; the card only adds when it was checked.
         if state.usingIPhone, !isBusy, state.statusMessage?.isEmpty ?? true {
-            if let checked = state.preCallLastChecked, level != nil { return "Checked " + Self.relative(checked) + " · iPhone camera" }
-            return "iPhone camera · Ojo checks the picture and runs your lights and curtains"
+            if let checked = state.preCallLastChecked, level != nil { return "Checked " + Self.relative(checked) }
+            return nil
         }
         if let note = state.scheduledNote, !isBusy { return note }
         if let message = state.statusMessage, !message.isEmpty, !isBusy { return Self.plainStatus(message) }
