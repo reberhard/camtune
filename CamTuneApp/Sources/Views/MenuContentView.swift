@@ -108,11 +108,7 @@ struct MenuContentView: View {
             VStack(alignment: .leading, spacing: 0) {
                 preview
                 if state.usingIPhone {
-                    // The phone frames and exposes itself (Center Stage); Ojo cannot move it.
-                    DiagnosticText("The iPhone frames itself. To reframe, move the phone.")
-                        .font(Ojo.Style.note).foregroundStyle(.secondary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
+                    // Shown on the picture (see preview); no extra row, so the popover fits.
                 } else {
                     QuickFramingControlsView(state: state)
                         .padding(.horizontal, 12)
@@ -191,7 +187,7 @@ struct MenuContentView: View {
         if let session = state.captureSession {
             CameraPreviewView(session: session)
                 .frame(maxWidth: .infinity)
-                .frame(height: 207)
+                .frame(height: 184)
                 .overlay {
                     CompositionOverlayView(scene: state.lastScene)
                 }
@@ -206,13 +202,20 @@ struct MenuContentView: View {
                     if state.lastScene?.faceCenterY != nil {
                         SceneQualityPillsView(scene: state.lastScene)
                             .padding(10)
+                    } else if state.usingIPhone {
+                        // The phone frames and exposes itself (Center Stage); Ojo cannot move it.
+                        DiagnosticText("The iPhone frames itself. To reframe, move the phone.")
+                            .font(Ojo.Style.note)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .padding(10)
                     }
                 }
         } else {
             Rectangle()
                 .fill(.quaternary)
                 .frame(maxWidth: .infinity)
-                .frame(height: 207)
+                .frame(height: 184)
                 .overlay {
                     PreviewUnavailableView(
                         title: state.error == nil ? "Starting the camera" : "Camera unavailable",
