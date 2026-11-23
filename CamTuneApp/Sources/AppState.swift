@@ -385,12 +385,22 @@ final class AppState {
             Task { await refreshCurtainStatus() }
         }
 
+        startCameraWatcher()
+        await refreshCameras()
+    }
+
+    /// Find the camera Ojo should use: the iPhone if exactly one is connected,
+    /// else the Brio. Runs at launch and again whenever macOS reports a camera
+    /// connecting or disconnecting (2026-11-23: Ojo had looked once at launch; the
+    /// iPhone's Continuity link dropped and rejoined six times that afternoon and Ojo
+    /// did not see the phone again until it was restarted).
+    func refreshCameras() async {
         if let phone = CameraCaptureService.findIPhoneCamera() {
             if iPhoneCameraName != phone.localizedName { stopPreview() }
             iPhoneCameraName = phone.localizedName
             currentDevice = nil
             scheduledStatus = Self.iPhoneScheduleNote
-            if error == "No UVC camera detected" { error = nil }
+            if error == "No UVC camera detected" || error == Self.iPhoneDisconnectedMessage { error = nil }
             return
         }
         if iPhoneCameraName != nil { stopPreview() }
@@ -410,6 +420,47 @@ final class AppState {
             // Camera session is NOT started here. It starts when the popover opens.
         } catch { Diagnostics.shared.failure(error, action: #function);
             self.error = error.localizedDescription
+        }
+    }
+
+    nonisolated static let iPhoneDisconnectedMessage =
+        "The iPhone camera disconnected. Check that it is mounted and nearby."
+    private var cameraObservers: [NSObjectProtocol] = []
+    private var cameraChangeTask: Task<Void, Never>?
+    /// Seconds to wait after the last connect/disconnect before looking again: a
+    /// Continuity Camera rejoin fires dozens of events within a second or two.
+    var cameraChangeSettle: Duration = .seconds(2)
+    /// Test seam: replaces the re-detect step so the settle logic can be checked
+    /// without real cameras.
+    var cameraRefreshOverride: (@MainActor () async -> Void)?
+
+    private func startCameraWatcher() {
+        guard cameraObservers.isEmpty else { return }
+        let names: [Notification.Name] = [
+            AVCaptureDevice.wasConnectedNotification, AVCaptureDevice.wasDisconnectedNotification,
+        ]
+        for name in names {
+            cameraObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.cameraListChanged() }
+            })
+        }
+    }
+
+    /// A camera came or went. Once things settle, pick the camera again; if the
+    /// preview was showing, restart it on the camera that is there now.
+    func cameraListChanged() {
+        cameraChangeTask?.cancel()
+        cameraChangeTask = Task { [weak self] in
+            guard let settle = self?.cameraChangeSettle else { return }
+            do { try await Task.sleep(for: settle) } catch { return }
+            guard let self else { return }
+            if let hook = self.cameraRefreshOverride { await hook(); return }
+            let wasPreviewing = self.captureSession != nil
+            self.stopPreview()
+            await self.refreshCameras()
+            if wasPreviewing { self.startPreview() }
         }
     }
 
@@ -466,7 +517,7 @@ final class AppState {
                 writeState(previewActive: true)
             } else {
                 throw CameraCaptureService.CaptureError.setupFailed(usingIPhone
-                    ? "The iPhone camera disconnected. Check that it is mounted and nearby."
+                    ? Self.iPhoneDisconnectedMessage
                     : "The selected UVC camera could not be matched uniquely to a preview device")
             }
         } catch { Diagnostics.shared.failure(error, action: #function);
